@@ -2,8 +2,16 @@ package storage
 
 import (
 	"context"
+
 	"github.com/dgmos/flow/internal/models"
 )
+
+// TaskFilter filters waiting / human task steps.
+type TaskFilter struct {
+	ExecutionID string
+	Assignee    string
+	NodeID      string
+}
 
 type Storage interface {
 	// Workflow operations
@@ -23,7 +31,13 @@ type Storage interface {
 	GetExecutionSteps(ctx context.Context, namespace string, executionID string) ([]*models.ExecutionStep, error)
 
 	// Worker operations
-	// ClaimReadyStep finds a step that is PENDING and has all predecessors COMPLETED.
-	// Optionally filtered by namespace if needed.
 	ClaimReadyStep(ctx context.Context, namespace string, workerID string) (*models.ExecutionStep, error)
+
+	// Waiting / human tasks
+	ListWaitingSteps(ctx context.Context, namespace string, filter TaskFilter) ([]*models.ExecutionStep, error)
+	GetExecutionStepByNode(ctx context.Context, namespace, executionID, nodeID string) (*models.ExecutionStep, error)
+
+	// Compensation journal
+	AppendCompensationRecord(ctx context.Context, namespace string, rec *models.CompensationRecord) error
+	ListCompensationRecords(ctx context.Context, namespace, executionID string) ([]*models.CompensationRecord, error)
 }

@@ -21,6 +21,15 @@ Designed for production setups. SQL backends automatically execute DDL migration
     db, _ := sqlx.Connect("mysql", "user:pass@tcp(localhost:3306)/db?parseTime=true")
     storage, _ := flow.NewMySQLStorage(db)
     ```
+*   **Table prefix / stdlib DB** (avoid colliding with host `workflows` tables — DGMOS should use `flow_`):
+    ```go
+    storage, _ := flow.NewMySQLStorageWithOptions(db, flow.SQLStorageOptions{
+        TablePrefix: "flow_",
+        AutoMigrate: true,
+    })
+    // or from database/sql:
+    // storage, _ := flow.NewSQLStorageFromDB(stdDB, "mysql", flow.SQLStorageOptions{TablePrefix: "flow_", AutoMigrate: true})
+    ```
 *   **PostgreSQL Usage**:
     ```go
     import (

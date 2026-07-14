@@ -126,7 +126,11 @@ func (r *RedisStorage) CreateExecutionStep(ctx context.Context, namespace string
 		return err
 	}
 
-	// Add to pending sorted set for workers
+	// Only PENDING steps are claimable by workers
+	if step.Status != models.TaskPending {
+		return nil
+	}
+
 	score := float64(time.Now().Unix())
 	if step.ScheduledAt != nil {
 		score = float64(step.ScheduledAt.Unix())
@@ -221,4 +225,98 @@ func (r *RedisStorage) GetExecutionStepByID(ctx context.Context, namespace strin
 		return nil, err
 	}
 	return &step, nil
+}
+
+func (r *RedisStorage) ListWaitingSteps(ctx context.Context, namespace string, filter storage.TaskFilter) ([]*models.ExecutionStep, error) {
+	execs, err := r.ListExecutions(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.ExecutionStep
+	for _, exec := range execs {
+		if filter.ExecutionID != "" && exec.ID != filter.ExecutionID {
+			continue
+		}
+		steps, err := r.GetExecutionSteps(ctx, namespace, exec.ID)
+		if err != nil {
+			continue
+		}
+		for _, step := range steps {
+			if step.Status != models.TaskWaiting {
+				continue
+			}
+			if filter.NodeID != "" && step.NodeID != filter.NodeID {
+				continue
+			}
+			if filter.Assignee != "" {
+				found := false
+				for _, a := range step.Assignees {
+					if a == filter.Assignee {
+						found = true
+						break
+					}
+				}
+				if !found && step.ClaimedBy != filter.Assignee {
+					continue
+				}
+			}
+			out = append(out, step)
+		}
+	}
+	return out, nil
+}
+
+func (r *RedisStorage) GetExecutionStepByNode(ctx context.Context, namespace, executionID, nodeID string) (*models.ExecutionStep, error) {
+	steps, err := r.GetExecutionSteps(ctx, namespace, executionID)
+	if err != nil {
+		return nil, err
+	}
+	var latest *models.ExecutionStep
+	for _, step := range steps {
+		if step.NodeID == nodeID {
+			if latest == nil || step.StartedAt.After(latest.StartedAt) {
+				latest = step
+			}
+		}
+	}
+	if latest == nil {
+		return nil, fmt.Errorf("step not found for node %s", nodeID)
+	}
+	return latest, nil
+}
+
+func journalKey(ns, id string) string { return fmt.Sprintf("jrnl:%s:%s", ns, id) }
+func journalListKey(ns, execID string) string {
+	return fmt.Sprintf("jrnl_list:%s:%s", ns, execID)
+}
+
+func (r *RedisStorage) AppendCompensationRecord(ctx context.Context, namespace string, rec *models.CompensationRecord) error {
+	rec.Namespace = namespace
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = time.Now()
+	}
+	data, _ := json.Marshal(rec)
+	if err := r.client.Set(ctx, journalKey(namespace, rec.ID), data, 0).Err(); err != nil {
+		return err
+	}
+	return r.client.RPush(ctx, journalListKey(namespace, rec.ExecutionID), rec.ID).Err()
+}
+
+func (r *RedisStorage) ListCompensationRecords(ctx context.Context, namespace, executionID string) ([]*models.CompensationRecord, error) {
+	ids, err := r.client.LRange(ctx, journalListKey(namespace, executionID), 0, -1).Result()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.CompensationRecord
+	for _, id := range ids {
+		data, err := r.client.Get(ctx, journalKey(namespace, id)).Bytes()
+		if err != nil {
+			continue
+		}
+		var rec models.CompensationRecord
+		if json.Unmarshal(data, &rec) == nil {
+			out = append(out, &rec)
+		}
+	}
+	return out, nil
 }

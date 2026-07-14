@@ -121,3 +121,88 @@ import "log/slog"
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 engine.WithLogger(logger)
 ```
+
+---
+
+## Interactive Advance & Human Tasks (DGMOS-ready)
+
+Host-driven step advancement for human/API workflows. Interactive / `humantask` nodes are created as `WAITING` so workers do not claim them.
+
+```go
+execID, _ := engine.StartWorkflow(ctx, "default", "approval", `{}`)
+
+tasks, _ := engine.ListTasks(ctx, "default", flow.TaskFilter{ExecutionID: execID})
+_, next, _ := engine.CompleteTask(ctx, "default", execID, "approve", "user@acme.com", "approve", `{"comment":"ok"}`)
+_, next, _ = engine.Advance(ctx, "default", execID, "next-node", "submit", `{}`)
+```
+
+Node config highlights:
+
+* `type: "humantask"` with `assignees`, `candidate_groups`, `claim_mode` (`any|all|first`)
+* `execution_mode: "interactive" | "hybrid" | "worker"` (default worker)
+* Opaque `Node.Meta` for UI (`title`, `ui_schema`, …) — ignored by the runtime
+
+See `examples/interactive_approval/`.
+
+---
+
+## Durable Variables
+
+```go
+_ = engine.SetVar(ctx, ns, execID, "customer_id", "C-1")
+_ = engine.MergeVars(ctx, ns, execID, map[string]interface{}{"cargo": payload})
+v, _ := engine.GetVar(ctx, ns, execID, "customer_id")
+```
+
+`setvariable` nodes also write to the durable store when executed by a worker/Advance.
+
+---
+
+## HostHooks & EventBus
+
+Engine lifecycle events are emitted on the engine path. Use `SetHostHooks` for synchronous host bridges (WebSocket / notifications):
+
+```go
+engine.SetHostHooks(myHandler) // HandleEvent called sync
+bus := flow.NewEventBus()
+bus.RegisterGlobalHandler(myHandler)
+engine.SetEventBus(bus)
+```
+
+Additional event types: `EventStepWaitingHuman`, `EventTaskClaimed`, `EventTaskCompleted`, `EventRollbackStarted`.
+
+---
+
+## Auth Resource Naming
+
+Recommended resource strings for `AuthProvider.CheckAccess`:
+
+| Resource | Example |
+|----------|---------|
+| Workflow | `workflow:{namespace}:{workflowId}` |
+| Execution | `execution:{namespace}:{executionId}` |
+| Task | `task:{namespace}:{stepId}` |
+
+Suggested metadata keys on workflows/executions: `customer_id`, `owner_id`.
+
+---
+
+## Rollback Journal
+
+```go
+_ = engine.RollbackTo(ctx, ns, execID, "charge", "user cancelled", "admin")
+records, _ := engine.ListCompensationJournal(ctx, ns, execID)
+```
+
+Saga compensation enqueue is preserved; journal stores actor/reason/snapshots.
+
+---
+
+## Legacy Import
+
+```go
+wf, err := flow.ImportStepChain("onboarding", "Onboarding", []flow.LegacyStep{
+    {ID: "a", Type: flow.NodeTypeHumanTask, Next: []string{"b"}},
+    {ID: "b", Type: flow.NodeTypeFunction, Config: map[string]interface{}{"function": "Done"}},
+})
+```

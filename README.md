@@ -222,23 +222,43 @@ Endpoints:
 
 ## Events
 
+Engine emits lifecycle events via `SetHostHooks` (sync) and/or `SetEventBus`.
+
 ```go
+engine.SetHostHooks(handler) // WS / notification bridge
+
 eventBus := flow.NewEventBus()
 eventBus.RegisterHandler(flow.EventWorkflowCompleted, handler)
 eventBus.RegisterGlobalHandler(handler)
+engine.SetEventBus(eventBus)
 ```
 
-Event types:
-- `EventWorkflowStarted`
-- `EventWorkflowCompleted`
-- `EventWorkflowFailed`
-- `EventStepStarted`
-- `EventStepCompleted`
-- `EventStepFailed`
+Event types include:
+- `EventWorkflowStarted` / `Completed` / `Failed` / `Cancelled`
+- `EventStepStarted` / `Completed` / `Failed` / `Retrying`
+- `EventStepWaitingSignal` / `EventStepWaitingHuman`
+- `EventSignalReceived` / `EventTaskClaimed` / `EventTaskCompleted`
+- `EventCompensationTriggered` / `EventRollbackStarted`
+
+## Interactive & Human Tasks
+
+```go
+_, next, err := engine.CompleteTask(ctx, ns, execID, "approve", "user-1", "approve", `{"note":"ok"}`)
+out, next, err := engine.Advance(ctx, ns, execID, "step-2", "submit", `{}`)
+tasks, _ := engine.ListTasks(ctx, ns, flow.TaskFilter{Assignee: "user-1"})
+```
+
+## Variables
+
+```go
+_ = engine.MergeVars(ctx, ns, execID, map[string]interface{}{"process_data": data})
+```
 
 ## Authorization
 
 Dgmos Flow provides a flexible, pluggable authorization system. Bring your own auth!
+
+Recommended resources: `workflow:{ns}:{id}`, `execution:{ns}:{id}`, `task:{ns}:{stepId}`.
 
 ### Interface
 

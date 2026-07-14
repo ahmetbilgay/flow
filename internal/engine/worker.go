@@ -134,13 +134,25 @@ func (w *Worker) processOne(ctx context.Context) {
 	}
 
 	if err != nil {
-		// Native Signal Support: Check for SIGNAL_WAIT
-		if err.Error() == "SIGNAL_WAIT" {
-			w.engine.logger.Info("Step entering WAITING state for external signal", "worker", w.id, "step", step.ID, "node", step.NodeID)
+		// Native Signal / Human wait
+		if err.Error() == WaitSignal || err.Error() == WaitHuman {
+			waitReason := err.Error()
+			w.engine.logger.Info("Step entering WAITING state", "worker", w.id, "step", step.ID, "node", step.NodeID, "reason", waitReason)
 			step.Status = models.TaskWaiting
-			if err := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); err != nil {
-				w.engine.logger.Error("Failed to update execution step to WAITING state", "worker", w.id, "step", step.ID, "error", err)
+			for _, n := range wf.Nodes {
+				if n.ID == step.NodeID {
+					ApplyHumanTaskConfig(step, &n)
+					break
+				}
 			}
+			if updErr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); updErr != nil {
+				w.engine.logger.Error("Failed to update execution step to WAITING state", "worker", w.id, "step", step.ID, "error", updErr)
+			}
+			evType := EventTypeStepWaitingSignal
+			if waitReason == WaitHuman {
+				evType = EventTypeStepWaitingHuman
+			}
+			w.engine.emit(ctx, Event{Type: evType, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf})
 			GetTelemetry().IncProcessed(step.Namespace, nodeType, "waiting")
 			return
 		}
@@ -227,6 +239,25 @@ func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, st
 	for _, n := range wf.Nodes {
 		if n.ID == step.NodeID && n.CompensateNodeID != "" {
 			w.engine.logger.Info("Triggering Saga Compensation", "execution", exec.ID, "failed_node", n.ID, "compensation_node", n.CompensateNodeID)
+
+			rec := &models.CompensationRecord{
+				ID:               fmt.Sprintf("jrnl-%s", step.ID),
+				Namespace:        step.Namespace,
+				ExecutionID:      step.ExecutionID,
+				FailedNodeID:     n.ID,
+				CompensateNodeID: n.CompensateNodeID,
+				Reason:           err.Error(),
+				Actor:            "system",
+				InputSnapshot:    step.Input,
+				OutputSnapshot:   step.Output,
+				CreatedAt:        time.Now(),
+			}
+			_ = w.engine.storage.AppendCompensationRecord(ctx, step.Namespace, rec)
+			w.engine.emit(ctx, Event{
+				Type: EventTypeCompensationTriggered, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf,
+				Metadata: map[string]interface{}{"compensateNodeId": n.CompensateNodeID},
+			})
+
 			compStep := &models.ExecutionStep{
 				ID:          fmt.Sprintf("comp-%s", step.ID),
 				Namespace:   step.Namespace,
@@ -239,14 +270,13 @@ func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, st
 			if err := w.engine.storage.CreateExecutionStep(ctx, step.Namespace, compStep); err != nil {
 				w.engine.logger.Error("Failed to create compensation step", "execution", exec.ID, "step", compStep.ID, "error", err)
 			}
-			return true // Compensation exists, don't fail execution yet
+			return true
 		}
 	}
-	return false // No compensation found
+	return false
 }
 
 func (w *Worker) executeStep(ctx context.Context, step *models.ExecutionStep) (string, error) {
-	// Find the execution to get the node config from workflow (In real apps, use a cache)
 	exec, err := w.engine.storage.GetExecution(ctx, step.Namespace, step.ExecutionID)
 	if err != nil {
 		return "", err
@@ -256,15 +286,17 @@ func (w *Worker) executeStep(ctx context.Context, step *models.ExecutionStep) (s
 		return "", err
 	}
 
-	var nodeConfig map[string]interface{}
+	ctx = WithExecutionContext(ctx, step.Namespace, step.ExecutionID)
+	ctx = WithEngine(ctx, w.engine)
+
 	for _, n := range wf.Nodes {
 		if n.ID == step.NodeID {
-			nodeConfig = n.Config
 			executor, err := w.registry.Get(n.Type)
 			if err != nil {
 				return "", err
 			}
-			return executor.Execute(ctx, nodeConfig, step.Input)
+			w.engine.emit(ctx, Event{Type: EventTypeStepStarted, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf})
+			return executor.Execute(ctx, n.Config, step.Input)
 		}
 	}
 

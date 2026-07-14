@@ -20,9 +20,34 @@ const (
 	EventTypeStepFailed            EventType = "step.failed"
 	EventTypeStepRetrying          EventType = "step.retrying"
 	EventTypeStepWaitingSignal     EventType = "step.waiting_signal"
+	EventTypeStepWaitingHuman      EventType = "step.waiting_human"
 	EventTypeSignalReceived        EventType = "signal.received"
+	EventTypeTaskClaimed           EventType = "task.claimed"
+	EventTypeTaskCompleted         EventType = "task.completed"
 	EventTypeCompensationTriggered EventType = "compensation.triggered"
+	EventTypeRollbackStarted       EventType = "rollback.started"
 )
+
+// AllEventTypes lists every known event type (for global handlers).
+func AllEventTypes() []EventType {
+	return []EventType{
+		EventTypeWorkflowStarted,
+		EventTypeWorkflowCompleted,
+		EventTypeWorkflowFailed,
+		EventTypeWorkflowCancelled,
+		EventTypeStepStarted,
+		EventTypeStepCompleted,
+		EventTypeStepFailed,
+		EventTypeStepRetrying,
+		EventTypeStepWaitingSignal,
+		EventTypeStepWaitingHuman,
+		EventTypeSignalReceived,
+		EventTypeTaskClaimed,
+		EventTypeTaskCompleted,
+		EventTypeCompensationTriggered,
+		EventTypeRollbackStarted,
+	}
+}
 
 // Event represents a workflow event
 type Event struct {
@@ -35,10 +60,12 @@ type Event struct {
 }
 
 // EventHandler is the interface for handling workflow events
-// Users implement this interface for custom notifications
 type EventHandler interface {
 	HandleEvent(ctx context.Context, event Event) error
 }
+
+// HostHooks is an alias for sync host integration (WS, notifications).
+type HostHooks = EventHandler
 
 // EventBus manages event handlers
 type EventBus struct {
@@ -59,33 +86,11 @@ func (eb *EventBus) RegisterHandler(eventType EventType, handler EventHandler) {
 	eb.handlers[eventType] = append(eb.handlers[eventType], handler)
 }
 
-// RegisterGlobalHandler adds a handler for ALL events
+// RegisterGlobalHandler adds a handler for ALL known event types.
 func (eb *EventBus) RegisterGlobalHandler(handler EventHandler) {
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
-	for eventType := range eb.handlers {
-		eb.handlers[eventType] = append(eb.handlers[eventType], handler)
-	}
-
-	// Also register for event types that might be added later
-	allEventTypes := []EventType{
-		EventTypeWorkflowStarted,
-		EventTypeWorkflowCompleted,
-		EventTypeWorkflowFailed,
-		EventTypeWorkflowCancelled,
-		EventTypeStepStarted,
-		EventTypeStepCompleted,
-		EventTypeStepFailed,
-		EventTypeStepRetrying,
-		EventTypeStepWaitingSignal,
-		EventTypeSignalReceived,
-		EventTypeCompensationTriggered,
-	}
-
-	for _, eventType := range allEventTypes {
-		if _, exists := eb.handlers[eventType]; !exists {
-			eb.handlers[eventType] = []EventHandler{}
-		}
+	for _, eventType := range AllEventTypes() {
 		eb.handlers[eventType] = append(eb.handlers[eventType], handler)
 	}
 }
@@ -102,10 +107,8 @@ func (eb *EventBus) Emit(ctx context.Context, event Event) {
 	copy(handlers, handlersList)
 	eb.mu.RUnlock()
 
-	// Execute handlers asynchronously to not block workflow execution
 	for _, handler := range handlers {
 		go func(h EventHandler) {
-			// Intentionally ignoring error to not block workflow execution
 			_ = h.HandleEvent(ctx, event)
 		}(handler)
 	}
@@ -129,6 +132,5 @@ func (eb *EventBus) EmitSync(ctx context.Context, event Event) []error {
 			errors = append(errors, err)
 		}
 	}
-
 	return errors
 }

@@ -225,3 +225,26 @@ Logs messages to the console for tracking.
       }
     }
     ```
+
+### 13. `humantask`
+Pauses until a host calls `ClaimTask` / `CompleteTask` / `Advance`. Steps are created as `WAITING` (workers skip them).
+*   **Config Options**:
+    *   `assignees` ([]string, optional): Allowed actor IDs/emails
+    *   `candidate_groups` ([]string, optional)
+    *   `claim_mode` (string): `any` | `all` | `first` (default `any`)
+    *   `due_at` (RFC3339 string, optional)
+    *   `priority` (number, optional)
+*   **Meta** (opaque UI): `title`, `description`, `required_data`, `ui_schema`
+*   **Example**:
+    ```json
+    {
+      "id": "approve",
+      "type": "humantask",
+      "name": "Manager Approval",
+      "meta": { "title": "Approve request" },
+      "config": {
+        "assignees": ["manager@acme.com"],
+        "claim_mode": "any"
+      }
+    }
+    ```

@@ -868,6 +868,7 @@ func TestNodeTypeConstants(t *testing.T) {
 		flow.NodeTypeSwitch,
 		flow.NodeTypeWait,
 		flow.NodeTypeSetVariable,
+		flow.NodeTypeHumanTask,
 	}
 
 	for _, nodeType := range nodeTypes {

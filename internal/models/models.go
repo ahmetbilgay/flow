@@ -23,47 +23,58 @@ const (
 	TaskCancelled TaskStatus = "CANCELLED"
 )
 
+// ClaimMode controls how human tasks accept claims.
+type ClaimMode string
+
+const (
+	ClaimAny   ClaimMode = "any"
+	ClaimAll   ClaimMode = "all"
+	ClaimFirst ClaimMode = "first"
+)
+
 // Workflow represents the blueprint of a workflow
 type Workflow struct {
-	ID          string            `json:"id" db:"id"`
-	Namespace   string            `json:"namespace" db:"namespace"`
-	Name        string            `json:"name" db:"name"`
-	Description string            `json:"description" db:"description"`
-	Version     int               `json:"version" db:"version"`
-	Status      WorkflowStatus    `json:"status" db:"status"`
-	Nodes       []Node            `json:"nodes" db:"-"`                  // Handled separately or as JSON
-	Edges       []Edge            `json:"edges" db:"-"`                  // Handled separately or as JSON
-	Labels      map[string]string `json:"labels" db:"-"`                 // Stored in JSON definition
-	Metadata    map[string]interface{} `json:"metadata,omitempty" db:"-"` // Flexible field for auth/custom data (user_id, tenant_id, owner, etc.)
-	CreatedAt   time.Time         `json:"createdAt" db:"created_at"`
-	UpdatedAt   time.Time         `json:"updatedAt" db:"updated_at"`
+	ID          string                 `json:"id" db:"id"`
+	Namespace   string                 `json:"namespace" db:"namespace"`
+	Name        string                 `json:"name" db:"name"`
+	Description string                 `json:"description" db:"description"`
+	Version     int                    `json:"version" db:"version"`
+	Status      WorkflowStatus         `json:"status" db:"status"`
+	Nodes       []Node                 `json:"nodes" db:"-"`
+	Edges       []Edge                 `json:"edges" db:"-"`
+	Labels      map[string]string      `json:"labels" db:"-"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty" db:"-"`
+	CreatedAt   time.Time              `json:"createdAt" db:"created_at"`
+	UpdatedAt   time.Time              `json:"updatedAt" db:"updated_at"`
 }
 
 // RetryPolicy defines how a node should be retried on failure
 type RetryPolicy struct {
-	MaxAttempts       int           `json:"maxAttempts"`       // Maximum number of retries
-	InitialInterval   time.Duration `json:"initialInterval"`   // First retry delay
-	BackoffCoefficient float64       `json:"backoffCoefficient"` // Multiplier for each subsequent retry
-	MaximumInterval   time.Duration `json:"maximumInterval"`   // Max delay cap
+	MaxAttempts        int           `json:"maxAttempts"`
+	InitialInterval    time.Duration `json:"initialInterval"`
+	BackoffCoefficient float64       `json:"backoffCoefficient"`
+	MaximumInterval    time.Duration `json:"maximumInterval"`
 }
 
 // Node represents a single step in a workflow
 type Node struct {
-	ID         string                 `json:"id"`
-	Type       string                 `json:"type"` // e.g., "http", "script", "delay"
-	Name       string                 `json:"name"`
+	ID               string                 `json:"id"`
+	Type             string                 `json:"type"`
+	Name             string                 `json:"name"`
 	Config           map[string]interface{} `json:"config"`
 	RetryCount       int                    `json:"retryCount"` // Deprecated, use RetryPolicy
 	RetryPolicy      *RetryPolicy           `json:"retryPolicy,omitempty"`
-	CompensateNodeID string                 `json:"compensateNodeId,omitempty"` // Saga pattern: Node to run on failure
+	CompensateNodeID string                 `json:"compensateNodeId,omitempty"`
+	// Meta is opaque UI/presentation metadata ignored by the engine runtime.
+	Meta map[string]interface{} `json:"meta,omitempty"`
 }
 
 // Edge represents a connection between two nodes
 type Edge struct {
-	ID         string `json:"id"`
-	SourceID   string `json:"sourceId"`
-	TargetID   string `json:"targetId"`
-	Condition  string `json:"condition,omitempty"` // e.g., "success", "failure", or a custom expression
+	ID        string `json:"id"`
+	SourceID  string `json:"sourceId"`
+	TargetID  string `json:"targetId"`
+	Condition string `json:"condition,omitempty"`
 }
 
 // Execution represents a single run instance of a workflow
@@ -76,10 +87,12 @@ type Execution struct {
 	Input        string                 `json:"input" db:"input"`
 	Output       string                 `json:"output" db:"output"`
 	ErrorMessage string                 `json:"errorMessage,omitempty" db:"error_message"`
-	Labels       map[string]string      `json:"labels" db:"-"`                 // Stored in JSON or separate column
-	Metadata     map[string]interface{} `json:"metadata,omitempty" db:"-"`     // Flexible field for auth/custom data (user_id, tenant_id, etc.)
-	StartedAt    time.Time              `json:"startedAt" db:"started_at"`
-	FinishedAt   *time.Time             `json:"finishedAt,omitempty" db:"finished_at"`
+	Labels       map[string]string      `json:"labels" db:"-"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty" db:"-"`
+	// Variables is the durable execution-scoped key/value store.
+	Variables  map[string]interface{} `json:"variables,omitempty" db:"-"`
+	StartedAt  time.Time              `json:"startedAt" db:"started_at"`
+	FinishedAt *time.Time             `json:"finishedAt,omitempty" db:"finished_at"`
 }
 
 // ExecutionStep represents the state of an individual node in an execution
@@ -99,4 +112,39 @@ type ExecutionStep struct {
 	StartedAt     time.Time         `json:"startedAt" db:"started_at"`
 	UpdatedAt     time.Time         `json:"updatedAt" db:"updated_at"`
 	FinishedAt    *time.Time        `json:"finishedAt,omitempty" db:"finished_at"`
+
+	// Human-task fields (serialized to task_meta in SQL)
+	Assignees       []string   `json:"assignees,omitempty" db:"-"`
+	CandidateGroups []string   `json:"candidateGroups,omitempty" db:"-"`
+	ClaimMode       ClaimMode  `json:"claimMode,omitempty" db:"-"`
+	ClaimedBy       string     `json:"claimedBy,omitempty" db:"-"`
+	ClaimedAt       *time.Time `json:"claimedAt,omitempty" db:"-"`
+	DueAt           *time.Time `json:"dueAt,omitempty" db:"-"`
+	Priority        int        `json:"priority,omitempty" db:"-"`
+	Action          string     `json:"action,omitempty" db:"-"` // last complete action
+}
+
+// CompensationRecord audits saga/rollback activity.
+type CompensationRecord struct {
+	ID               string    `json:"id" db:"id"`
+	Namespace        string    `json:"namespace" db:"namespace"`
+	ExecutionID      string    `json:"executionId" db:"execution_id"`
+	FailedNodeID     string    `json:"failedNodeId" db:"failed_node_id"`
+	CompensateNodeID string    `json:"compensateNodeId" db:"compensate_node_id"`
+	Reason           string    `json:"reason" db:"reason"`
+	Actor            string    `json:"actor" db:"actor"`
+	InputSnapshot    string    `json:"inputSnapshot,omitempty" db:"input_snapshot"`
+	OutputSnapshot   string    `json:"outputSnapshot,omitempty" db:"output_snapshot"`
+	CreatedAt        time.Time `json:"createdAt" db:"created_at"`
+}
+
+// LegacyStep describes a linear/legacy step for ImportStepChain.
+type LegacyStep struct {
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"`
+	Name       string                 `json:"name"`
+	Config     map[string]interface{} `json:"config,omitempty"`
+	Meta       map[string]interface{} `json:"meta,omitempty"`
+	Next       []string               `json:"next,omitempty"`
+	Conditions map[string]string      `json:"conditions,omitempty"` // targetID -> condition
 }

@@ -20,6 +20,8 @@ type Engine struct {
 	registry     *Registry
 	logger       *slog.Logger
 	authProvider auth.AuthProvider // Optional - if nil, no auth checks
+	eventBus     *EventBus
+	hostHooks    HostHooks // sync OnEvent via EmitSync when set
 }
 
 func NewEngine(s storage.Storage, r *Registry) *Engine {
@@ -27,6 +29,7 @@ func NewEngine(s storage.Storage, r *Registry) *Engine {
 		storage:  s,
 		registry: r,
 		logger:   slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+		eventBus: NewEventBus(),
 	}
 }
 
@@ -40,6 +43,35 @@ func (e *Engine) WithLogger(l *slog.Logger) *Engine {
 func (e *Engine) SetAuthProvider(provider auth.AuthProvider) *Engine {
 	e.authProvider = provider
 	return e
+}
+
+// SetEventBus replaces the engine event bus (async handlers).
+func (e *Engine) SetEventBus(bus *EventBus) *Engine {
+	if bus != nil {
+		e.eventBus = bus
+	}
+	return e
+}
+
+// EventBus returns the engine's event bus.
+func (e *Engine) EventBus() *EventBus {
+	return e.eventBus
+}
+
+// SetHostHooks sets a synchronous host integration handler (WS, notifications).
+func (e *Engine) SetHostHooks(h HostHooks) *Engine {
+	e.hostHooks = h
+	return e
+}
+
+func (e *Engine) emit(ctx context.Context, event Event) {
+	// Sync emit avoids races on shared Execution/Step pointers during worker updates.
+	if e.eventBus != nil {
+		_ = e.eventBus.EmitSync(ctx, event)
+	}
+	if e.hostHooks != nil {
+		_ = e.hostHooks.HandleEvent(ctx, event)
+	}
 }
 
 // StartWorkflow creates a new execution for a workflow
@@ -65,6 +97,7 @@ func (e *Engine) StartWorkflow(ctx context.Context, namespace, workflowID string
 		Version:    wf.Version,
 		Status:     models.TaskRunning,
 		Input:      input,
+		Variables:  make(map[string]interface{}),
 		StartedAt:  time.Now(),
 	}
 
@@ -91,21 +124,24 @@ func (e *Engine) StartWorkflow(ctx context.Context, namespace, workflowID string
 
 	initialNodeIDs := g.GetInitialNodes()
 	for _, nodeID := range initialNodeIDs {
-		step := &models.ExecutionStep{
-			ID:          uuid.New().String(),
-			Namespace:   namespace,
-			ExecutionID: execID,
-			NodeID:      nodeID,
-			Status:      models.TaskPending,
-			Input:       input, // First nodes get the execution input
-			StartedAt:   time.Now(),
-		}
+		n := FindNode(wf, nodeID)
+		step := NewStepForNode(namespace, execID, nodeID, input, n)
+		step.ID = uuid.New().String()
+		waiting := step.Status == models.TaskWaiting
 		if err := e.storage.CreateExecutionStep(ctx, namespace, step); err != nil {
 			return "", err
+		}
+		if waiting {
+			e.emit(ctx, Event{
+				Type: EventTypeStepWaitingHuman, Namespace: namespace, Execution: exec, Step: step, Workflow: wf,
+			})
 		}
 	}
 
 	telemetry.WorkflowsStarted.WithLabelValues(namespace, workflowID).Inc()
+	e.emit(ctx, Event{
+		Type: EventTypeWorkflowStarted, Namespace: namespace, Execution: exec, Workflow: wf,
+	})
 
 	return execID, nil
 }
@@ -121,7 +157,6 @@ func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, o
 		return err
 	}
 
-	// Find the execution to get the workflow
 	exec, err := e.storage.GetExecution(ctx, step.Namespace, step.ExecutionID)
 	if err != nil {
 		return err
@@ -132,15 +167,17 @@ func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, o
 		return err
 	}
 
+	e.emit(ctx, Event{
+		Type: EventTypeStepCompleted, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf,
+	})
+
 	g, err := NewGraph(wf)
 	if err != nil {
 		return err
 	}
 
-	// Find next nodes with branch-aware routing
 	nextNodes := g.GetNextNodesWithBranch(step.NodeID, output)
 
-	// Mark non-matching branch targets as SKIPPED
 	allEdges := g.Edges[step.NodeID]
 	for _, edge := range allEdges {
 		isTaken := false
@@ -166,15 +203,13 @@ func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, o
 		}
 
 		if ready {
-			finalInput := output
-			// 10/10 God-Tier: Check for JOIN and aggregate inputs
+			finalInput := e.mergeVarsIntoInput(ctx, exec.Namespace, exec.ID, output)
 			if g.InDegree[nextID] > 1 {
 				steps, _ := e.storage.GetExecutionSteps(ctx, exec.Namespace, exec.ID)
 				aggMap := make(map[string]interface{})
 				for _, pID := range g.Predecessors[nextID] {
 					for _, s := range steps {
 						if s.NodeID == pID {
-							// In aggregation, use the latest output of each predecessor
 							var outData interface{}
 							_ = json.Unmarshal([]byte(s.Output), &outData)
 							aggMap[pID] = outData
@@ -182,20 +217,20 @@ func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, o
 					}
 				}
 				aggJSON, _ := json.Marshal(aggMap)
-				finalInput = string(aggJSON)
+				finalInput = e.mergeVarsIntoInput(ctx, exec.Namespace, exec.ID, string(aggJSON))
 			}
 
-			newStep := &models.ExecutionStep{
-				ID:          uuid.New().String(),
-				Namespace:   exec.Namespace,
-				ExecutionID: exec.ID,
-				NodeID:      nextID,
-				Status:      models.TaskPending,
-				Input:       finalInput,
-				StartedAt:   time.Now(),
-			}
+			n := FindNode(wf, nextID)
+			newStep := NewStepForNode(exec.Namespace, exec.ID, nextID, finalInput, n)
+			newStep.ID = uuid.New().String()
+			waiting := newStep.Status == models.TaskWaiting
 			if err := e.storage.CreateExecutionStep(ctx, exec.Namespace, newStep); err != nil {
 				return err
+			}
+			if waiting {
+				e.emit(ctx, Event{
+					Type: EventTypeStepWaitingHuman, Namespace: exec.Namespace, Execution: exec, Step: newStep, Workflow: wf,
+				})
 			}
 		}
 	}
@@ -214,7 +249,11 @@ func (e *Engine) CancelExecution(ctx context.Context, namespace string, execID s
 	exec.Status = models.TaskCancelled
 	now := time.Now()
 	exec.FinishedAt = &now
-	return e.storage.UpdateExecution(ctx, namespace, exec)
+	if err := e.storage.UpdateExecution(ctx, namespace, exec); err != nil {
+		return err
+	}
+	e.emit(ctx, Event{Type: EventTypeWorkflowCancelled, Namespace: namespace, Execution: exec})
+	return nil
 }
 
 func (e *Engine) FailExecution(ctx context.Context, namespace string, execID string, message string) error {
@@ -251,6 +290,10 @@ func (e *Engine) SignalExecution(ctx context.Context, namespace string, execID s
 	mergedOutput := e.mergeSignalData(targetStep.Input, output)
 
 	e.logger.Info("Signaling execution resume", "execution", execID, "node", nodeID)
+	e.emit(ctx, Event{
+		Type: EventTypeSignalReceived, Namespace: namespace,
+		Metadata: map[string]interface{}{"nodeId": nodeID, "executionId": execID},
+	})
 	return e.CompleteStep(ctx, targetStep, mergedOutput)
 }
 
@@ -528,11 +571,13 @@ func (e *Engine) checkAndFinishExecution(ctx context.Context, exec *models.Execu
 			exec.ErrorMessage = firstError
 			e.logger.Info("Execution failed", "execution", exec.ID, "error", firstError)
 			telemetry.WorkflowsFailed.WithLabelValues(exec.Namespace, exec.WorkflowID, firstError).Inc()
+			e.emit(ctx, Event{Type: EventTypeWorkflowFailed, Namespace: exec.Namespace, Execution: exec})
 		} else {
 			exec.Status = models.TaskCompleted
 			exec.Output = finalOutput
 			e.logger.Info("Execution completed", "execution", exec.ID)
 			telemetry.WorkflowsCompleted.WithLabelValues(exec.Namespace, exec.WorkflowID).Inc()
+			e.emit(ctx, Event{Type: EventTypeWorkflowCompleted, Namespace: exec.Namespace, Execution: exec})
 		}
 		now := time.Now()
 		exec.FinishedAt = &now

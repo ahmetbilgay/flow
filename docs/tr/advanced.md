@@ -121,3 +121,18 @@ import "log/slog"
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 engine.WithLogger(logger)
 ```
+
+---
+
+## Interactive Advance ve Human Task (DGMOS-ready)
+
+İnsan/API güdümlü adımlar için worker claim edilmez; `humantask` / `execution_mode: interactive` adımlar doğrudan `WAITING` oluşur.
+
+```go
+_, next, _ := engine.CompleteTask(ctx, "default", execID, "approve", "user@acme.com", "approve", `{"comment":"ok"}`)
+_, next, _ = engine.Advance(ctx, "default", execID, "next", "submit", `{}`)
+```
+
+`SetHostHooks` ile WS/notification bind edin. Değişkenler: `GetVar` / `SetVar` / `MergeVars`. SQL prefix: `flow.SQLStorageOptions{TablePrefix: "flow_"}`. Auth kaynakları: `workflow:{ns}:{id}`, `execution:{ns}:{id}`, `task:{ns}:{stepId}`.
+
+Örnek: `examples/interactive_approval/`.

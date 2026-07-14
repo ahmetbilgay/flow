@@ -21,6 +21,13 @@ Dgmos Flow; akış durumlarının kalıcılığını, kilit mekanizmalarını ve
     db, _ := sqlx.Connect("mysql", "user:pass@tcp(localhost:3306)/db?parseTime=true")
     storage, _ := flow.NewMySQLStorage(db)
     ```
+*   **Tablo öneki / stdlib DB** (host `workflows` tablosuyla çakışmayı önlemek için DGMOS `flow_` kullanmalı):
+    ```go
+    storage, _ := flow.NewMySQLStorageWithOptions(db, flow.SQLStorageOptions{
+        TablePrefix: "flow_",
+        AutoMigrate: true,
+    })
+    ```
 *   **PostgreSQL Kullanımı**:
     ```go
     import (

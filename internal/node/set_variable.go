@@ -4,32 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/dgmos/flow/internal/engine"
 )
 
-// SetVariableNode injects or overwrites keys on the flowing JSON context.
-// It's the workflow equivalent of `ctx["key"] = value` — no external calls,
-// just pure data enrichment so downstream nodes always have what they need.
-//
-// Config:
-//   - "variables" (map, required): key→value pairs to write into the JSON context
-//     Values can be any JSON-compatible type: string, number, bool, object.
-//
-// Example config:
-//
-//	{
-//	  "variables": {
-//	    "status":   "pending",
-//	    "maxRetry": 3,
-//	    "meta":     {"source": "api"}
-//	  }
-//	}
-//
-// Input:  {"userId": "abc"}
-// Output: {"userId": "abc", "status": "pending", "maxRetry": 3, "meta": {"source": "api"}}
+// SetVariableNode injects or overwrites keys on the flowing JSON context
+// and also persists them to durable execution variables when an engine is
+// attached via context.
 type SetVariableNode struct{}
 
-func (n *SetVariableNode) Execute(_ context.Context, config map[string]interface{}, input string) (string, error) {
-	// Start from existing context
+func (n *SetVariableNode) Execute(ctx context.Context, config map[string]interface{}, input string) (string, error) {
 	out := make(map[string]interface{})
 	if input != "" && input != "null" {
 		if err := json.Unmarshal([]byte(input), &out); err != nil {
@@ -42,9 +26,16 @@ func (n *SetVariableNode) Execute(_ context.Context, config map[string]interface
 		return "", fmt.Errorf("set_variable: 'variables' must be an object")
 	}
 
-	// Merge variables — config values overwrite input values for same keys
 	for k, v := range variables {
 		out[k] = v
+	}
+
+	if eng := engine.EngineFromContext(ctx); eng != nil {
+		ns := engine.NamespaceFromContext(ctx)
+		execID := engine.ExecutionIDFromContext(ctx)
+		if ns != "" && execID != "" {
+			_ = eng.MergeVars(ctx, ns, execID, variables)
+		}
 	}
 
 	b, err := json.Marshal(out)

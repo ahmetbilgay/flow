@@ -34,6 +34,7 @@ package flow
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"time"
@@ -46,7 +47,7 @@ import (
 	"github.com/dgmos/flow/internal/storage"
 	"github.com/dgmos/flow/internal/storage/memory"
 	"github.com/dgmos/flow/internal/storage/redis"
-	"github.com/dgmos/flow/internal/storage/sql"
+	sqlstore "github.com/dgmos/flow/internal/storage/sql"
 	"github.com/dgmos/flow/internal/telemetry"
 	"github.com/dgmos/flow/internal/trigger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -107,6 +108,7 @@ const (
 	NodeTypeSwitch      = "switch"
 	NodeTypeWait        = "wait"
 	NodeTypeSetVariable = "setvariable"
+	NodeTypeHumanTask   = "humantask"
 )
 
 // Workflow statuses
@@ -159,7 +161,7 @@ func NewEngine(storage Storage, registry *Registry) *Engine {
 	registry.Register("function", funcNode)
 	registry.Register("http", node.NewHTTPNode())
 	registry.Register("condition", &node.ConditionNode{})
-	registry.Register("log", &node.LogNode{})
+	registry.Register("log", node.NewLogNode())
 	registry.Register("transform", &node.TransformNode{})
 	registry.Register("signal", &node.SignalNode{})
 	registry.Register("subworkflow", subWFNode)
@@ -168,6 +170,7 @@ func NewEngine(storage Storage, registry *Registry) *Engine {
 	registry.Register("switch", &node.SwitchNode{})
 	registry.Register("wait", &node.WaitNode{})
 	registry.Register("setvariable", &node.SetVariableNode{})
+	registry.Register("humantask", &node.HumanTaskNode{})
 
 	eng := &Engine{engine.NewEngine(storage, registry.Registry)}
 	subWFNode.SetEngine(eng)
@@ -241,6 +244,88 @@ func (e *Engine) StartWorker(ctx context.Context, namespace, workerID string) {
 	e.Engine.StartWorker(ctx, namespace, workerID)
 }
 
+// SetHostHooks wires a synchronous host integration handler (e.g. WebSocket bridge).
+func (e *Engine) SetHostHooks(h EventHandler) *Engine {
+	e.Engine.SetHostHooks(h)
+	return e
+}
+
+// SetEventBus replaces the engine event bus.
+func (e *Engine) SetEventBus(bus *EventBus) *Engine {
+	if bus != nil {
+		e.Engine.SetEventBus(bus.EventBus)
+	}
+	return e
+}
+
+// Advance interactively completes a waiting/interactive step.
+func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action, payload string) (string, []*ExecutionStep, error) {
+	return e.Engine.Advance(ctx, namespace, execID, nodeID, action, payload)
+}
+
+// ListTasks lists WAITING human/interactive tasks.
+func (e *Engine) ListTasks(ctx context.Context, namespace string, filter TaskFilter) ([]*ExecutionStep, error) {
+	return e.Engine.ListTasks(ctx, namespace, filter)
+}
+
+// ClaimTask claims a human task for an actor.
+func (e *Engine) ClaimTask(ctx context.Context, namespace, execID, nodeID, actor string) error {
+	return e.Engine.ClaimTask(ctx, namespace, execID, nodeID, actor)
+}
+
+// ReleaseTask releases a claimed human task.
+func (e *Engine) ReleaseTask(ctx context.Context, namespace, execID, nodeID, actor string) error {
+	return e.Engine.ReleaseTask(ctx, namespace, execID, nodeID, actor)
+}
+
+// CompleteTask claims (if needed) and completes a human task.
+func (e *Engine) CompleteTask(ctx context.Context, namespace, execID, nodeID, actor, action, payload string) (string, []*ExecutionStep, error) {
+	return e.Engine.CompleteTask(ctx, namespace, execID, nodeID, actor, action, payload)
+}
+
+// GetVar reads a durable execution variable.
+func (e *Engine) GetVar(ctx context.Context, namespace, execID, key string) (interface{}, error) {
+	return e.Engine.GetVar(ctx, namespace, execID, key)
+}
+
+// SetVar sets a durable execution variable.
+func (e *Engine) SetVar(ctx context.Context, namespace, execID, key string, value interface{}) error {
+	return e.Engine.SetVar(ctx, namespace, execID, key, value)
+}
+
+// MergeVars merges into durable execution variables.
+func (e *Engine) MergeVars(ctx context.Context, namespace, execID string, vars map[string]interface{}) error {
+	return e.Engine.MergeVars(ctx, namespace, execID, vars)
+}
+
+// GetVars returns all durable execution variables.
+func (e *Engine) GetVars(ctx context.Context, namespace, execID string) (map[string]interface{}, error) {
+	return e.Engine.GetVars(ctx, namespace, execID)
+}
+
+// RollbackTo journals and enqueues compensation toward a node.
+func (e *Engine) RollbackTo(ctx context.Context, namespace, execID, nodeID, reason, actor string) error {
+	return e.Engine.RollbackTo(ctx, namespace, execID, nodeID, reason, actor)
+}
+
+// ListCompensationJournal lists compensation/rollback records.
+func (e *Engine) ListCompensationJournal(ctx context.Context, namespace, execID string) ([]*CompensationRecord, error) {
+	return e.Engine.ListCompensationJournal(ctx, namespace, execID)
+}
+
+// TaskFilter filters ListTasks results.
+type TaskFilter = engine.TaskFilter
+
+// CompensationRecord audits saga/rollback activity.
+type CompensationRecord = models.CompensationRecord
+
+// Claim mode constants
+const (
+	ClaimAny   = models.ClaimAny
+	ClaimAll   = models.ClaimAll
+	ClaimFirst = models.ClaimFirst
+)
+
 // ========================================
 // REGISTRY METHODS
 // ========================================
@@ -308,27 +393,31 @@ func NewMemoryStorage() Storage {
 }
 
 // NewMySQLStorage creates a MySQL storage backend with auto-migration
-//
-// Example:
-//
-//	db, _ := sqlx.Connect("mysql", "user:pass@tcp(localhost:3306)/db?parseTime=true")
-//	storage, _ := flow.NewMySQLStorage(db)
-//
-// Tables are automatically created if they don't exist.
 func NewMySQLStorage(db *sqlx.DB) (Storage, error) {
-	return sql.NewSQLStorage(db, "mysql")
+	return sqlstore.NewSQLStorage(db, "mysql")
+}
+
+// SQLStorageOptions configures table prefix and migrations.
+type SQLStorageOptions = sqlstore.Options
+
+// NewMySQLStorageWithOptions creates MySQL storage with prefix / migrate options.
+func NewMySQLStorageWithOptions(db *sqlx.DB, opts SQLStorageOptions) (Storage, error) {
+	return sqlstore.NewSQLStorageWithOptions(db, "mysql", opts)
 }
 
 // NewPostgreSQLStorage creates a PostgreSQL storage backend with auto-migration
-//
-// Example:
-//
-//	db, _ := sqlx.Connect("postgres", "postgres://user:pass@localhost/db?sslmode=disable")
-//	storage, _ := flow.NewPostgreSQLStorage(db)
-//
-// Tables are automatically created if they don't exist.
 func NewPostgreSQLStorage(db *sqlx.DB) (Storage, error) {
-	return sql.NewSQLStorage(db, "postgres")
+	return sqlstore.NewSQLStorage(db, "postgres")
+}
+
+// NewPostgreSQLStorageWithOptions creates Postgres storage with options.
+func NewPostgreSQLStorageWithOptions(db *sqlx.DB, opts SQLStorageOptions) (Storage, error) {
+	return sqlstore.NewSQLStorageWithOptions(db, "postgres", opts)
+}
+
+// NewSQLStorageFromDB wraps database/sql.DB (dialect: "mysql" or "postgres").
+func NewSQLStorageFromDB(db *sql.DB, dialect string, opts SQLStorageOptions) (Storage, error) {
+	return sqlstore.NewSQLStorageFromDB(db, dialect, opts)
 }
 
 // NewRedisStorage creates a Redis storage backend
@@ -557,8 +646,12 @@ const (
 	EventStepFailed            = engine.EventTypeStepFailed
 	EventStepRetrying          = engine.EventTypeStepRetrying
 	EventStepWaitingSignal     = engine.EventTypeStepWaitingSignal
+	EventStepWaitingHuman      = engine.EventTypeStepWaitingHuman
 	EventSignalReceived        = engine.EventTypeSignalReceived
+	EventTaskClaimed           = engine.EventTypeTaskClaimed
+	EventTaskCompleted         = engine.EventTypeTaskCompleted
 	EventCompensationTriggered = engine.EventTypeCompensationTriggered
+	EventRollbackStarted       = engine.EventTypeRollbackStarted
 )
 
 // Event represents a workflow event
@@ -566,6 +659,9 @@ type Event = engine.Event
 
 // EventHandler handles workflow events
 type EventHandler = engine.EventHandler
+
+// HostHooks is a sync host integration alias (WS, notifications).
+type HostHooks = engine.HostHooks
 
 // EventBus manages event subscriptions
 type EventBus struct {
