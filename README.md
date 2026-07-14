@@ -294,7 +294,7 @@ func (a *MyAuth) CheckAccess(ctx context.Context, resource string, action string
     return nil
 }
 
-// Set auth provider
+
 engine := flow.NewEngine(storage, registry)
 engine.SetAuthProvider(&MyAuth{})
 ```
