@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/parevo/flow/internal/engine"
+	"github.com/dgmos/flow/internal/engine"
 )
 
 type WebhookManager struct {

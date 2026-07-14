@@ -3,7 +3,7 @@ package engine
 import (
 	"time"
 
-	"github.com/parevo/flow/internal/telemetry"
+	"github.com/dgmos/flow/internal/telemetry"
 )
 
 // Telemetry bridge to Prometheus

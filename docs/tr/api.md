@@ -1,6 +1,6 @@
 # API Başvurusu
 
-Parevo Flow API'sinin temel bileşenleri ve yöntemleri hakkında detaylı kılavuz.
+Dgmos Flow API'sinin temel bileşenleri ve yöntemleri hakkında detaylı kılavuz.
 
 ---
 

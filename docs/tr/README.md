@@ -1,4 +1,4 @@
-# Parevo Flow
+# Dgmos Flow
 
 > Go uygulamaları için geliştirilmiş, DAG tabanlı, yüksek performanslı ve hafif bir iş akışı yönetim (workflow orchestration) motoru.
 
@@ -6,7 +6,7 @@
 
 ## 🎯 Giriş
 
-**Parevo Flow**, Yönlü Döngüsüz Çizgeler (DAG) olarak modellenen karmaşık ve dağıtık iş süreçlerini yönetmek için tasarlanmıştır. İş akışı tasarımlarını basitleştirir, adım düzeyinde hata toleransı sunar, kalıcı durum yönetimi sağlar ve birden fazla işçi (worker) örneği üzerinde kolayca ölçeklenir.
+**Dgmos Flow**, Yönlü Döngüsüz Çizgeler (DAG) olarak modellenen karmaşık ve dağıtık iş süreçlerini yönetmek için tasarlanmıştır. İş akışı tasarımlarını basitleştirir, adım düzeyinde hata toleransı sunar, kalıcı durum yönetimi sağlar ve birden fazla işçi (worker) örneği üzerinde kolayca ölçeklenir.
 
 ### Temel Özellikler
 *   **DAG Tabanlı Yönlendirme**: Grafik doğrulamaları (döngü kontrolleri) ve koşullu dallanmalar.
@@ -23,7 +23,7 @@
 Kütüphaneyi Go modüllerini kullanarak projenize dahil edebilirsiniz:
 
 ```bash
-go get github.com/parevo/flow
+go get github.com/dgmos/flow
 ```
 
 ---
@@ -47,7 +47,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 func main() {

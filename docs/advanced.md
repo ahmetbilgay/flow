@@ -6,7 +6,7 @@ Learn about advanced enterprise features: Pluggable Authorization, Cron Tickers,
 
 ## 🔒 Pluggable Authorization
 
-Parevo Flow enforces access controls on workflow definitions using a pluggable `AuthProvider` interface.
+Dgmos Flow enforces access controls on workflow definitions using a pluggable `AuthProvider` interface.
 
 ```go
 type AuthProvider interface {
@@ -54,7 +54,7 @@ Run workflows periodically using Cron expressions. The `CronManager` wraps the e
 import (
 	"log/slog"
 	"os"
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 // 1. Create Cron Manager

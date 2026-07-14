@@ -13,7 +13,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 // ─────────────────────────────────────────────────────────────
@@ -71,10 +71,10 @@ func initDB() {
 		created_at TEXT
 	);
 
-	INSERT OR IGNORE INTO users VALUES (1,'Ahmet Bilgay','ahmet@parevo.com','admin','Engineering','active',75000,'2023-01-15');
-	INSERT OR IGNORE INTO users VALUES (2,'Zeynep Yılmaz','zeynep@parevo.com','employee','HR','active',55000,'2023-03-20');
-	INSERT OR IGNORE INTO users VALUES (3,'Mert Kaya','mert@parevo.com','employee','Sales','suspended',45000,'2022-11-10');
-	INSERT OR IGNORE INTO users VALUES (4,'Elif Şahin','elif@parevo.com','employee','Finance','active',60000,'2024-01-05');
+	INSERT OR IGNORE INTO users VALUES (1,'Ahmet Bilgay','ahmet@dgmos.com','admin','Engineering','active',75000,'2023-01-15');
+	INSERT OR IGNORE INTO users VALUES (2,'Zeynep Yılmaz','zeynep@dgmos.com','employee','HR','active',55000,'2023-03-20');
+	INSERT OR IGNORE INTO users VALUES (3,'Mert Kaya','mert@dgmos.com','employee','Sales','suspended',45000,'2022-11-10');
+	INSERT OR IGNORE INTO users VALUES (4,'Elif Şahin','elif@dgmos.com','employee','Finance','active',60000,'2024-01-05');
 
 	INSERT OR IGNORE INTO badges VALUES (1,1,'Field Expert','active','2024-01-01','2025-01-01');
 	INSERT OR IGNORE INTO badges VALUES (2,1,'OHS Certified','active','2024-02-01','2025-02-01');
@@ -288,7 +288,7 @@ func main() {
 	// 1. Initialize database
 	initDB()
 
-	// 2. Setup Parevo Flow
+	// 2. Setup Dgmos Flow
 	storage := flow.NewMemoryStorage()
 	registry := flow.NewRegistry()
 	engine := flow.NewEngine(storage, registry)
@@ -307,7 +307,7 @@ func main() {
 	// 4. Start worker
 	go engine.StartWorker(ctx, "visual-builder", "worker-ui-1")
 
-	fmt.Println("🚀 Parevo Flow Visual Builder started!")
+	fmt.Println("🚀 Dgmos Flow Visual Builder started!")
 	fmt.Println("📍 Open: http://localhost:3000")
 	fmt.Println("─────────────────────────────────────")
 

@@ -1,6 +1,6 @@
 # API Reference
 
-A detailed guide on the core components of the Parevo Flow API.
+A detailed guide on the core components of the Dgmos Flow API.
 
 ---
 

@@ -1,6 +1,6 @@
 # Yerleşik Düğüm Tipleri
 
-Parevo Flow, kutudan çıktığı haliyle birçok hazır adım düğümü tipiyle birlikte gelir.
+Dgmos Flow, kutudan çıktığı haliyle birçok hazır adım düğümü tipiyle birlikte gelir.
 
 ---
 

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 // ============================================

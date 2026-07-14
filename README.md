@@ -1,11 +1,11 @@
-# Parevo Flow
+# Dgmos Flow
 
 A workflow orchestration engine for Go applications. Provides DAG-based execution, distributed task processing, and durable state management.
 
 ## Installation
 
 ```bash
-go get github.com/parevo/flow
+go get github.com/dgmos/flow
 ```
 
 All dependencies (database drivers, Redis client, etc.) are automatically installed.
@@ -22,7 +22,7 @@ package main
 
 import (
     "context"
-    "github.com/parevo/flow"
+    "github.com/dgmos/flow"
     _ "github.com/go-sql-driver/mysql"
     "github.com/jmoiron/sqlx"
 )
@@ -238,7 +238,7 @@ Event types:
 
 ## Authorization
 
-Parevo Flow provides a flexible, pluggable authorization system. Bring your own auth!
+Dgmos Flow provides a flexible, pluggable authorization system. Bring your own auth!
 
 ### Interface
 
@@ -457,4 +457,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Documentation
 
-Full API documentation: https://pkg.go.dev/github.com/parevo/flow
+Full API documentation: https://pkg.go.dev/github.com/dgmos/flow

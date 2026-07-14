@@ -2,7 +2,7 @@ package builder
 
 import (
 	"github.com/google/uuid"
-	"github.com/parevo/flow/internal/models"
+	"github.com/dgmos/flow/internal/models"
 )
 
 type WorkflowBuilder struct {

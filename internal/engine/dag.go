@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/parevo/flow/internal/models"
+	"github.com/dgmos/flow/internal/models"
 )
 
 // Graph represents the structure of the workflow

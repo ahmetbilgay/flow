@@ -2,7 +2,7 @@ package storage
 
 import (
 	"context"
-	"github.com/parevo/flow/internal/models"
+	"github.com/dgmos/flow/internal/models"
 )
 
 type Storage interface {

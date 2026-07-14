@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🧪 Running Parevo Flow Test Suite..."
+echo "🧪 Running Dgmos Flow Test Suite..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Run tests with coverage

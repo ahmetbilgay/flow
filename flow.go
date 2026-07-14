@@ -3,7 +3,7 @@
 // Quick Start with MySQL:
 //
 //	import (
-//	    "github.com/parevo/flow"
+//	    "github.com/dgmos/flow"
 //	    _ "github.com/go-sql-driver/mysql"
 //	    "github.com/jmoiron/sqlx"
 //	)
@@ -39,16 +39,16 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/parevo/flow/internal/builder"
-	"github.com/parevo/flow/internal/engine"
-	"github.com/parevo/flow/internal/models"
-	"github.com/parevo/flow/internal/node"
-	"github.com/parevo/flow/internal/storage"
-	"github.com/parevo/flow/internal/storage/memory"
-	"github.com/parevo/flow/internal/storage/redis"
-	"github.com/parevo/flow/internal/storage/sql"
-	"github.com/parevo/flow/internal/telemetry"
-	"github.com/parevo/flow/internal/trigger"
+	"github.com/dgmos/flow/internal/builder"
+	"github.com/dgmos/flow/internal/engine"
+	"github.com/dgmos/flow/internal/models"
+	"github.com/dgmos/flow/internal/node"
+	"github.com/dgmos/flow/internal/storage"
+	"github.com/dgmos/flow/internal/storage/memory"
+	"github.com/dgmos/flow/internal/storage/redis"
+	"github.com/dgmos/flow/internal/storage/sql"
+	"github.com/dgmos/flow/internal/telemetry"
+	"github.com/dgmos/flow/internal/trigger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/robfig/cron/v3"
 )

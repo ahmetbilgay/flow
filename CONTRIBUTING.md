@@ -1,6 +1,6 @@
-# Contributing to Parevo Flow
+# Contributing to Dgmos Flow
 
-First off, thank you for considering contributing to Parevo Flow! It's people like you that make the open-source community such an amazing place to learn, inspire, and create.
+First off, thank you for considering contributing to Dgmos Flow! It's people like you that make the open-source community such an amazing place to learn, inspire, and create.
 
 ## How Can I Contribute?
 

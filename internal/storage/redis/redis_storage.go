@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/parevo/flow/internal/models"
-	"github.com/parevo/flow/internal/storage"
+	"github.com/dgmos/flow/internal/models"
+	"github.com/dgmos/flow/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 

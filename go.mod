@@ -1,4 +1,4 @@
-module github.com/parevo/flow
+module github.com/dgmos/flow
 
 go 1.23.0
 

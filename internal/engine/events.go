@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/parevo/flow/internal/models"
+	"github.com/dgmos/flow/internal/models"
 )
 
 // EventType represents different workflow events

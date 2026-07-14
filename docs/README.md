@@ -1,4 +1,4 @@
-# Parevo Flow
+# Dgmos Flow
 
 > A lightweight, high-performance, DAG-based workflow orchestration engine for Go applications.
 
@@ -6,7 +6,7 @@
 
 ## 🎯 Introduction
 
-**Parevo Flow** is designed to execute complex, distributed business processes modeled as Directed Acyclic Graphs (DAGs). It simplifies workflow design, ensures task-level fault tolerance, provides state management, and scales gracefully across multiple worker instances.
+**Dgmos Flow** is designed to execute complex, distributed business processes modeled as Directed Acyclic Graphs (DAGs). It simplifies workflow design, ensures task-level fault tolerance, provides state management, and scales gracefully across multiple worker instances.
 
 ### Key Features
 *   **DAG-Based Routing**: Graph validations (cycle checks) and conditional routing.
@@ -23,7 +23,7 @@
 Install the library using Go modules:
 
 ```bash
-go get github.com/parevo/flow
+go get github.com/dgmos/flow
 ```
 
 ---
@@ -47,7 +47,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 // Context key types to avoid collisions

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/parevo/flow/internal/models"
+	"github.com/dgmos/flow/internal/models"
 )
 
 type MemoryStorage struct {

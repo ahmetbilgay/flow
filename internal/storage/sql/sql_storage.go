@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/parevo/flow/internal/models"
-	"github.com/parevo/flow/internal/storage"
+	"github.com/dgmos/flow/internal/models"
+	"github.com/dgmos/flow/internal/storage"
 )
 
 type Dialect interface {

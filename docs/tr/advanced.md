@@ -6,7 +6,7 @@ Sistemin ileri düzey özellikleri: Esnek Yetkilendirme (Authorization), Cron Ti
 
 ## 🔒 Esnek Yetkilendirme (AuthProvider)
 
-Parevo Flow, iş akışı tanımları ve çalıştırmaları üzerinde yetkilendirmeyi `AuthProvider` arayüzü ile yönetir.
+Dgmos Flow, iş akışı tanımları ve çalıştırmaları üzerinde yetkilendirmeyi `AuthProvider` arayüzü ile yönetir.
 
 ```go
 type AuthProvider interface {
@@ -54,7 +54,7 @@ engine.SetAuthProvider(&CustomAuth{})
 import (
 	"log/slog"
 	"os"
-	"github.com/parevo/flow"
+	"github.com/dgmos/flow"
 )
 
 // 1. Cron Manager Oluşturun

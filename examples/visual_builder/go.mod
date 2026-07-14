@@ -1,10 +1,10 @@
-module github.com/parevo/flow/examples/visual_builder
+module github.com/dgmos/flow/examples/visual_builder
 
 go 1.23.0
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.41
-	github.com/parevo/flow v0.0.0
+	github.com/dgmos/flow v0.0.0
 )
 
 require (
@@ -26,4 +26,4 @@ require (
 	google.golang.org/protobuf v1.36.8 // indirect
 )
 
-replace github.com/parevo/flow => ../../
+replace github.com/dgmos/flow => ../../

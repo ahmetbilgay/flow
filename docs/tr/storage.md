@@ -1,6 +1,6 @@
 # Veri Depolama & Güvenlik
 
-Parevo Flow; akış durumlarının kalıcılığını, kilit mekanizmalarını ve metaverileri soyut bir `Storage` arayüzü ile yönetir.
+Dgmos Flow; akış durumlarının kalıcılığını, kilit mekanizmalarını ve metaverileri soyut bir `Storage` arayüzü ile yönetir.
 
 ---
 
@@ -15,7 +15,7 @@ Parevo Flow; akış durumlarının kalıcılığını, kilit mekanizmalarını v
     import (
     	_ "github.com/go-sql-driver/mysql"
     	"github.com/jmoiron/sqlx"
-    	"github.com/parevo/flow"
+    	"github.com/dgmos/flow"
     )
 
     db, _ := sqlx.Connect("mysql", "user:pass@tcp(localhost:3306)/db?parseTime=true")
@@ -26,7 +26,7 @@ Parevo Flow; akış durumlarının kalıcılığını, kilit mekanizmalarını v
     import (
     	_ "github.com/lib/pq"
     	"github.com/jmoiron/sqlx"
-    	"github.com/parevo/flow"
+    	"github.com/dgmos/flow"
     )
 
     db, _ := sqlx.Connect("postgres", "postgres://user:pass@localhost/db?sslmode=disable")
@@ -52,7 +52,7 @@ Düşük gecikme süreli akış sistemleri için uygun, yüksek performanslı an
 
 ## 🔒 Veri Şifreleme (AES-GCM)
 
-Güvenlik uyumluluk standartlarını (örn. PCI-DSS, KVKK, GDPR) karşılamak için Parevo Flow, akış verilerinin şifrelenerek saklanmasını destekler. Bu özellik aktif edildiğinde, akış girdileri, adım çıktıları ve hata detayları veritabanına yazılmadan önce şifrelenir ve okunurken otomatik olarak deşifre edilir.
+Güvenlik uyumluluk standartlarını (örn. PCI-DSS, KVKK, GDPR) karşılamak için Dgmos Flow, akış verilerinin şifrelenerek saklanmasını destekler. Bu özellik aktif edildiğinde, akış girdileri, adım çıktıları ve hata detayları veritabanına yazılmadan önce şifrelenir ve okunurken otomatik olarak deşifre edilir.
 
 ### Kullanım
 ```go

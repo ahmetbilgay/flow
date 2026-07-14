@@ -1,6 +1,6 @@
 # Storage Backends & Security
 
-Parevo Flow isolates state persistence, locking mechanics, and metadata storage into a pluggable `Storage` interface.
+Dgmos Flow isolates state persistence, locking mechanics, and metadata storage into a pluggable `Storage` interface.
 
 ---
 
@@ -15,7 +15,7 @@ Designed for production setups. SQL backends automatically execute DDL migration
     import (
     	_ "github.com/go-sql-driver/mysql"
     	"github.com/jmoiron/sqlx"
-    	"github.com/parevo/flow"
+    	"github.com/dgmos/flow"
     )
 
     db, _ := sqlx.Connect("mysql", "user:pass@tcp(localhost:3306)/db?parseTime=true")
@@ -26,7 +26,7 @@ Designed for production setups. SQL backends automatically execute DDL migration
     import (
     	_ "github.com/lib/pq"
     	"github.com/jmoiron/sqlx"
-    	"github.com/parevo/flow"
+    	"github.com/dgmos/flow"
     )
 
     db, _ := sqlx.Connect("postgres", "postgres://user:pass@localhost/db?sslmode=disable")
@@ -52,7 +52,7 @@ RWMutex-backed in-memory store. Recommended for local testing, prototyping, and 
 
 ## 🔒 Payload Encryption (AES-GCM)
 
-To meet security compliance standards (e.g., PCI-DSS, GDPR), Parevo Flow supports transparent data-at-rest encryption of execution payloads. When enabled, execution inputs, step outputs, and error details are encrypted before being written to disk/database, and decrypted automatically on read.
+To meet security compliance standards (e.g., PCI-DSS, GDPR), Dgmos Flow supports transparent data-at-rest encryption of execution payloads. When enabled, execution inputs, step outputs, and error details are encrypted before being written to disk/database, and decrypted automatically on read.
 
 ### Usage
 ```go

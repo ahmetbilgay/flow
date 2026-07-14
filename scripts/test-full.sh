@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Running Full Parevo Flow Test Suite..."
+echo "🚀 Running Full Dgmos Flow Test Suite..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Colors

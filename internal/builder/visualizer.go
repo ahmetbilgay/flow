@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/parevo/flow/internal/models"
+	"github.com/dgmos/flow/internal/models"
 )
 
 // ToMermaid generates a Mermaid.js flowchart representation of the workflow.

@@ -1,6 +1,6 @@
 # Built-in Node Types
 
-Parevo Flow comes pre-registered with several standard task node types.
+Dgmos Flow comes pre-registered with several standard task node types.
 
 ---
 

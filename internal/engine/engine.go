@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/parevo/flow/internal/auth"
-	"github.com/parevo/flow/internal/models"
-	"github.com/parevo/flow/internal/storage"
-	"github.com/parevo/flow/internal/telemetry"
+	"github.com/dgmos/flow/internal/auth"
+	"github.com/dgmos/flow/internal/models"
+	"github.com/dgmos/flow/internal/storage"
+	"github.com/dgmos/flow/internal/telemetry"
 )
 
 type Engine struct {

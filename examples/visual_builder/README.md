@@ -1,8 +1,8 @@
-# 🌌 Parevo Flow Visual Studio
+# 🌌 Dgmos Flow Visual Studio
 
 **Interactive drag-and-drop workflow builder with live execution tracking**
 
-A production-ready visual workflow editor that demonstrates all node types in Parevo Flow through a comprehensive **Employee Onboarding Journey** example.
+A production-ready visual workflow editor that demonstrates all node types in Dgmos Flow through a comprehensive **Employee Onboarding Journey** example.
 
 ---
 
@@ -29,7 +29,7 @@ go run main.go
 Expected output:
 ```
 📦 In-memory SQLite database initialized with seed data.
-🌟 Parevo Flow Visual Studio (SQL Edition) is running!
+🌟 Dgmos Flow Visual Studio (SQL Edition) is running!
 👉 Open: http://localhost:8080
 🗄️  DB Inspect: http://localhost:8080/api/db?table=users
 📋 Tables: users | badges | documents | invoices | audit_log
