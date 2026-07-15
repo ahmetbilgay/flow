@@ -287,14 +287,14 @@ CREATE TABLE IF NOT EXISTS %s (
 }
 
 type taskMetaPayload struct {
-	Assignees       []string          `json:"assignees,omitempty"`
-	CandidateGroups []string          `json:"candidateGroups,omitempty"`
-	ClaimMode       models.ClaimMode  `json:"claimMode,omitempty"`
-	ClaimedBy       string            `json:"claimedBy,omitempty"`
-	ClaimedAt       *time.Time        `json:"claimedAt,omitempty"`
-	DueAt           *time.Time        `json:"dueAt,omitempty"`
-	Priority        int               `json:"priority,omitempty"`
-	Action          string            `json:"action,omitempty"`
+	Assignees       []string         `json:"assignees,omitempty"`
+	CandidateGroups []string         `json:"candidateGroups,omitempty"`
+	ClaimMode       models.ClaimMode `json:"claimMode,omitempty"`
+	ClaimedBy       string           `json:"claimedBy,omitempty"`
+	ClaimedAt       *time.Time       `json:"claimedAt,omitempty"`
+	DueAt           *time.Time       `json:"dueAt,omitempty"`
+	Priority        int              `json:"priority,omitempty"`
+	Action          string           `json:"action,omitempty"`
 }
 
 func encodeTaskMeta(step *models.ExecutionStep) []byte {
@@ -325,14 +325,61 @@ func decodeTaskMeta(step *models.ExecutionStep, raw []byte) {
 	step.Action = p.Action
 }
 
-type execRow struct {
-	models.Execution
-	VariablesJSON []byte `db:"variables"`
+func nullStr(ns sql.NullString) string {
+	if ns.Valid {
+		return ns.String
+	}
+	return ""
 }
 
+func decodeLabels(raw []byte) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]string
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	return m
+}
+
+// execRow is a SQL-scan DTO. Avoid embedding models.Execution: Labels/Metadata are
+// db:"-" on the model while the table has labels/metadata JSON columns, and
+// input/output/error_message can be NULL (database/sql cannot scan NULL into string).
+type execRow struct {
+	ID           string         `db:"id"`
+	Namespace    string         `db:"namespace"`
+	WorkflowID   string         `db:"workflow_id"`
+	Version      int            `db:"version"`
+	Status       string         `db:"status"`
+	Input        sql.NullString `db:"input"`
+	Output       sql.NullString `db:"output"`
+	LabelsJSON   []byte         `db:"labels"`
+	MetadataJSON []byte         `db:"metadata"`
+	VariablesJSON []byte        `db:"variables"`
+	ErrorMessage sql.NullString `db:"error_message"`
+	StartedAt    time.Time      `db:"started_at"`
+	FinishedAt   *time.Time     `db:"finished_at"`
+}
+
+// stepRow is a SQL-scan DTO for the same NULL / labels reasons as execRow.
 type stepRow struct {
-	models.ExecutionStep
-	TaskMeta []byte `db:"task_meta"`
+	ID            string         `db:"id"`
+	Namespace     string         `db:"namespace"`
+	ExecutionID   string         `db:"execution_id"`
+	NodeID        string         `db:"node_id"`
+	Status        string         `db:"status"`
+	Input         sql.NullString `db:"input"`
+	Output        sql.NullString `db:"output"`
+	Error         sql.NullString `db:"error"`
+	LabelsJSON    []byte         `db:"labels"`
+	TaskMeta      []byte         `db:"task_meta"`
+	AttemptNumber int            `db:"attempt_number"`
+	WorkerID      sql.NullString `db:"worker_id"`
+	ScheduledAt   *time.Time     `db:"scheduled_at"`
+	StartedAt     time.Time      `db:"started_at"`
+	UpdatedAt     time.Time      `db:"updated_at"`
+	FinishedAt    *time.Time     `db:"finished_at"`
 }
 
 func (s *SQLStorage) SaveWorkflow(ctx context.Context, namespace string, wf *models.Workflow) error {
@@ -397,7 +444,22 @@ func (s *SQLStorage) CreateExecution(ctx context.Context, namespace string, exec
 }
 
 func (s *SQLStorage) mapExec(row *execRow) *models.Execution {
-	exec := row.Execution
+	exec := &models.Execution{
+		ID:           row.ID,
+		Namespace:    row.Namespace,
+		WorkflowID:   row.WorkflowID,
+		Version:      row.Version,
+		Status:       models.TaskStatus(row.Status),
+		Input:        nullStr(row.Input),
+		Output:       nullStr(row.Output),
+		ErrorMessage: nullStr(row.ErrorMessage),
+		Labels:       decodeLabels(row.LabelsJSON),
+		StartedAt:    row.StartedAt,
+		FinishedAt:   row.FinishedAt,
+	}
+	if len(row.MetadataJSON) > 0 {
+		_ = json.Unmarshal(row.MetadataJSON, &exec.Metadata)
+	}
 	if len(row.VariablesJSON) > 0 {
 		_ = json.Unmarshal(row.VariablesJSON, &exec.Variables)
 	}
@@ -410,7 +472,7 @@ func (s *SQLStorage) mapExec(row *execRow) *models.Execution {
 		dOut, _ := s.crypto.Decrypt(exec.Output)
 		exec.Output = dOut
 	}
-	return &exec
+	return exec
 }
 
 func (s *SQLStorage) GetExecution(ctx context.Context, namespace string, id string) (*models.Execution, error) {
@@ -481,8 +543,24 @@ func (s *SQLStorage) UpdateExecutionStep(ctx context.Context, namespace string, 
 }
 
 func (s *SQLStorage) mapStep(row *stepRow) *models.ExecutionStep {
-	step := row.ExecutionStep
-	decodeTaskMeta(&step, row.TaskMeta)
+	step := &models.ExecutionStep{
+		ID:            row.ID,
+		Namespace:     row.Namespace,
+		ExecutionID:   row.ExecutionID,
+		NodeID:        row.NodeID,
+		Status:        models.TaskStatus(row.Status),
+		Input:         nullStr(row.Input),
+		Output:        nullStr(row.Output),
+		Error:         nullStr(row.Error),
+		AttemptNumber: row.AttemptNumber,
+		WorkerID:      nullStr(row.WorkerID),
+		Labels:        decodeLabels(row.LabelsJSON),
+		ScheduledAt:   row.ScheduledAt,
+		StartedAt:     row.StartedAt,
+		UpdatedAt:     row.UpdatedAt,
+		FinishedAt:    row.FinishedAt,
+	}
+	decodeTaskMeta(step, row.TaskMeta)
 	if s.crypto != nil {
 		dInput, _ := s.crypto.Decrypt(step.Input)
 		step.Input = dInput
@@ -491,7 +569,7 @@ func (s *SQLStorage) mapStep(row *stepRow) *models.ExecutionStep {
 		dError, _ := s.crypto.Decrypt(step.Error)
 		step.Error = dError
 	}
-	return &step
+	return step
 }
 
 func (s *SQLStorage) GetExecutionSteps(ctx context.Context, namespace string, executionID string) ([]*models.ExecutionStep, error) {
