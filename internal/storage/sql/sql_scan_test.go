@@ -90,3 +90,15 @@ func TestMapExecNullOutputAndLabels(t *testing.T) {
 		t.Fatalf("variables: %#v", exec.Variables)
 	}
 }
+
+func TestJSONColumnArg(t *testing.T) {
+	if jsonColumnArg("") != nil {
+		t.Fatal("empty string should map to nil")
+	}
+	if jsonColumnArg("   ") != nil {
+		t.Fatal("whitespace should map to nil")
+	}
+	if jsonColumnArg(`{"a":1}`) != `{"a":1}` {
+		t.Fatal("non-empty JSON should be preserved")
+	}
+}

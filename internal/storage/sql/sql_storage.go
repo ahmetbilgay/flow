@@ -432,6 +432,14 @@ func nullStr(ns sql.NullString) string {
 	return ""
 }
 
+// jsonColumnArg maps empty strings to SQL NULL for JSON columns (MySQL/Postgres reject "").
+func jsonColumnArg(s string) interface{} {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
+
 func decodeLabels(raw []byte) map[string]string {
 	if len(raw) == 0 {
 		return nil
@@ -539,7 +547,7 @@ func (s *SQLStorage) CreateExecution(ctx context.Context, namespace string, exec
 	q := s.ph(fmt.Sprintf(`INSERT INTO %s (id, namespace, workflow_id, version, status, input, variables, started_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.t("executions")))
 	_, err := s.db.ExecContext(ctx, q,
-		exec.ID, exec.Namespace, exec.WorkflowID, exec.Version, exec.Status, input, vars, exec.StartedAt)
+		exec.ID, exec.Namespace, exec.WorkflowID, exec.Version, exec.Status, jsonColumnArg(input), vars, exec.StartedAt)
 	return err
 }
 
@@ -593,7 +601,7 @@ func (s *SQLStorage) UpdateExecution(ctx context.Context, namespace string, exec
 	vars, _ := json.Marshal(exec.Variables)
 	q := s.ph(fmt.Sprintf(`UPDATE %s SET status = ?, output = ?, error_message = ?, finished_at = ?, variables = ? WHERE id = ? AND namespace = ?`, s.t("executions")))
 	_, err := s.db.ExecContext(ctx, q,
-		exec.Status, output, exec.ErrorMessage, exec.FinishedAt, vars, exec.ID, namespace)
+		exec.Status, jsonColumnArg(output), exec.ErrorMessage, exec.FinishedAt, vars, exec.ID, namespace)
 	return err
 }
 
@@ -622,7 +630,7 @@ func (s *SQLStorage) CreateExecutionStep(ctx context.Context, namespace string, 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.t("execution_steps")))
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx, q,
-		step.ID, step.Namespace, step.ExecutionID, step.NodeID, step.Status, input, meta, step.WorkerID, step.ScheduledAt, step.StartedAt, now)
+		step.ID, step.Namespace, step.ExecutionID, step.NodeID, step.Status, jsonColumnArg(input), meta, step.WorkerID, step.ScheduledAt, step.StartedAt, now)
 	return err
 }
 
@@ -638,7 +646,7 @@ func (s *SQLStorage) UpdateExecutionStep(ctx context.Context, namespace string, 
 	meta := encodeTaskMeta(step)
 	q := s.ph(fmt.Sprintf(`UPDATE %s SET status = ?, output = ?, error = ?, finished_at = ?, attempt_number = ?, scheduled_at = ?, updated_at = ?, worker_id = ?, task_meta = ? WHERE id = ? AND namespace = ?`, s.t("execution_steps")))
 	_, err := s.db.ExecContext(ctx, q,
-		step.Status, output, errStr, step.FinishedAt, step.AttemptNumber, step.ScheduledAt, time.Now(), step.WorkerID, meta, step.ID, namespace)
+		step.Status, jsonColumnArg(output), errStr, step.FinishedAt, step.AttemptNumber, step.ScheduledAt, time.Now(), step.WorkerID, meta, step.ID, namespace)
 	return err
 }
 
