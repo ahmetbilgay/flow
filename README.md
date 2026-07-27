@@ -185,7 +185,8 @@ builder.AddNode("charge", flow.NodeTypeFunction).
 ### Encryption
 
 ```go
-crypto, _ := flow.NewCrypto("your-32-byte-encryption-key-here")
+// Key must be 32 bytes encoded as 64 hex characters
+crypto, _ := flow.NewCrypto("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 storage.(*sql.SQLStorage).SetEncryption(crypto)
 ```
 
@@ -194,10 +195,18 @@ storage.(*sql.SQLStorage).SetEncryption(crypto)
 ### Cron
 
 ```go
-cronMgr := flow.NewCronManager(engine, logger)
-cronMgr.Start()
-cronMgr.AddSchedule(namespace, workflowID, "0 2 * * *", input)
+_ = engine.CronManager.Start(ctx)
+id, _ := engine.CronManager.AddScheduleWithOpts(ctx, namespace, workflowID, "0 0 9 * * *", input, flow.ScheduleOpts{
+    Name: "daily-backup", Timezone: "Europe/Istanbul", CatchUp: true,
+})
+expr := "0 30 9 * * *"
+_ = engine.CronManager.UpdateSchedule(ctx, namespace, id, flow.ScheduleUpdateOpts{CronExpression: &expr})
+_ = engine.CronManager.PauseSchedule(ctx, namespace, id)  // soft disable
+_ = engine.CronManager.RemoveSchedule(ctx, namespace, id) // hard delete
+api := flow.NewAPIManager(webhookMgr).WithCron(engine.CronManager)
 ```
+
+Multi-replica safe (atomic fire claim). Pause = soft disable; DELETE = hard remove. Table: `schedules` (or `{prefix}schedules`).
 
 ### Webhooks
 
@@ -216,9 +225,14 @@ http.Handle("/", apiMgr)
 Endpoints:
 - `GET /health` - Health check
 - `GET /metrics` - Prometheus metrics
+- `GET /api/{namespace}/executions` - List executions
 - `GET /api/{namespace}/executions/{id}` - Get execution
+- `GET /api/{namespace}/executions/{id}/steps` - Get execution steps
 - `POST /api/{namespace}/executions/{id}/cancel` - Cancel execution
 - `POST /api/{namespace}/executions/{id}/signal/{nodeID}` - Send signal
+- `POST /api/{namespace}/executions/{id}/rollback` - Start saga rollback
+- `POST /api/{namespace}/executions/{id}/tasks/{nodeId}/claim|complete|advance` - Human tasks
+- `GET /api/{namespace}/tasks` - List waiting human tasks
 
 ## Events
 
@@ -421,31 +435,40 @@ engine.WithLogger(logger)
 ## Testing
 
 ```bash
-# Run tests
+# Unit tests (default)
 go test
 
-# Run with coverage
+# Unit tests with coverage
 go test -cover
 
-# Run with race detector
+# Race detector
 go test -race
 
-# Run benchmark
-go test -bench=.
+# Integration / E2E (requires Docker: MySQL, PostgreSQL, Redis)
+bash scripts/test-integration.sh
+# or manually:
+# docker compose up -d mysql postgres redis
+# go test -tags=integration ./... -timeout=10m
+
+# Full local suite (unit + stability + benchmarks)
+bash scripts/test-full.sh
 ```
 
 ## Examples
 
 See `examples/` directory for complete working examples:
-- `examples/visual_builder/` - Web-based workflow builder with drag-and-drop interface
+- `examples/auth/` - Multi-tenant authorization
+- `examples/interactive_approval/` - Human task approval flow
 
 ## Database Schema
 
 Tables are created automatically when using SQL storage backends:
 
 - `workflows` - Workflow definitions
-- `executions` - Workflow execution instances
-- `execution_steps` - Individual task states
+- `executions` - Workflow execution instances (includes `variables`)
+- `execution_steps` - Individual task states (includes `task_meta`)
+- `compensation_journal` - Saga/rollback audit trail
+- `schedules` - Durable cron schedules
 
 Indexes are optimized for:
 - Namespace-based queries

@@ -26,6 +26,13 @@ const (
 	EventTypeTaskCompleted         EventType = "task.completed"
 	EventTypeCompensationTriggered EventType = "compensation.triggered"
 	EventTypeRollbackStarted       EventType = "rollback.started"
+	EventTypeScheduleCreated       EventType = "schedule.created"
+	EventTypeScheduleUpdated       EventType = "schedule.updated"
+	EventTypeSchedulePaused        EventType = "schedule.paused"
+	EventTypeScheduleResumed       EventType = "schedule.resumed"
+	EventTypeScheduleDeleted       EventType = "schedule.deleted"
+	EventTypeScheduleFired         EventType = "schedule.fired"
+	EventTypeScheduleFireFailed    EventType = "schedule.fire_failed"
 )
 
 // AllEventTypes lists every known event type (for global handlers).
@@ -46,6 +53,13 @@ func AllEventTypes() []EventType {
 		EventTypeTaskCompleted,
 		EventTypeCompensationTriggered,
 		EventTypeRollbackStarted,
+		EventTypeScheduleCreated,
+		EventTypeScheduleUpdated,
+		EventTypeSchedulePaused,
+		EventTypeScheduleResumed,
+		EventTypeScheduleDeleted,
+		EventTypeScheduleFired,
+		EventTypeScheduleFireFailed,
 	}
 }
 

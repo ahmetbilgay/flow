@@ -33,6 +33,20 @@ Retrieves the execution status and output details by ID.
 exec, err := engine.GetExecution(ctx, "default", execID)
 ```
 
+#### `ListExecutions`
+Lists all executions in a namespace (requires `execution:{ns}:*` view permission when auth is enabled).
+```go
+execs, err := engine.ListExecutions(ctx, "default")
+```
+
+#### `CheckAccess`
+Runs the configured `AuthProvider` (no-op when unset).
+```go
+err := engine.CheckAccess(ctx, "execution:default:exec-1", "view")
+```
+
+---
+
 #### `GetExecutionSteps`
 Retrieves individual task status, outputs, or error details for an execution.
 ```go
@@ -159,3 +173,60 @@ Compiles and returns the finalized `*flow.Workflow`.
 ```go
 wf := builder.Build()
 ```
+
+---
+
+### REST (executions & human tasks)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/{ns}/executions?status=RUNNING` | List executions |
+| GET | `/api/{ns}/executions/{id}` | Get execution |
+| GET | `/api/{ns}/executions/{id}/steps` | List steps |
+| POST | `/api/{ns}/executions/{id}/cancel` | Cancel |
+| POST | `/api/{ns}/executions/{id}/signal/{nodeId}` | Signal |
+| POST | `/api/{ns}/executions/{id}/rollback` | Saga rollback |
+| GET | `/api/{ns}/tasks?assignee=u1` | List waiting human tasks |
+| POST | `/api/{ns}/executions/{id}/tasks/{nodeId}/claim` | Claim task |
+| POST | `/api/{ns}/executions/{id}/tasks/{nodeId}/complete` | Complete task |
+
+Auth: when `SetAuthProvider` is configured, REST handlers enforce the same resource checks as the engine (`execution:{ns}:*`, `task:{ns}:*`, etc.).
+
+---
+
+## ⏱️ CronManager (Durable Scheduler)
+
+`engine.CronManager` persists schedules, supports IANA timezones, multi-replica fire claims, catch-up, and schedule windows.
+
+```go
+_ = engine.CronManager.Start(ctx)
+id, err := engine.CronManager.AddScheduleWithOpts(ctx, "tenant-a", "wf-id", "0 0 9 * * *", `{}`, flow.ScheduleOpts{
+    Name: "morning", Timezone: "Europe/Istanbul", CatchUp: true,
+})
+expr := "0 30 9 * * *"
+_ = engine.CronManager.UpdateSchedule(ctx, "tenant-a", id, flow.ScheduleUpdateOpts{CronExpression: &expr})
+_ = engine.CronManager.PauseSchedule(ctx, "tenant-a", id)   // soft disable
+_ = engine.CronManager.ResumeSchedule(ctx, "tenant-a", id)
+_ = engine.CronManager.RemoveSchedule(ctx, "tenant-a", id)  // hard delete
+```
+
+### REST (enable with `WithCron`)
+
+```go
+api := flow.NewAPIManager(flow.NewWebhookManager(engine)).WithCron(engine.CronManager)
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/{ns}/schedules?active_only=true&limit=50&offset=0` | List |
+| POST | `/api/{ns}/schedules` | Create |
+| GET | `/api/{ns}/schedules/{id}` | Get |
+| PUT | `/api/{ns}/schedules/{id}` | Partial update (only sent fields) |
+| DELETE | `/api/{ns}/schedules/{id}` | Hard delete |
+| POST | `/api/{ns}/schedules/{id}/pause` | Soft disable |
+| POST | `/api/{ns}/schedules/{id}/resume` | Resume |
+| POST | `/api/{ns}/schedules/preview` | Next N fire times |
+
+**Semantics:** `Pause` = soft disable (`is_active=false`). `DELETE` = hard remove. Expired `ends_at` auto-pauses without auth. Fire claim is atomic across replicas.
+
+**Metrics:** `flow_schedules_active`, `flow_schedule_fires_total{result}`.

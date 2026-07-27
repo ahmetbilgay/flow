@@ -48,26 +48,31 @@ engine.SetAuthProvider(&CustomAuth{})
 
 ## ⏱️ Zamanlanmış Görevler (Cron Manager)
 
-İş akışlarını Cron ifadeleri kullanarak periyodik olarak çalıştırabilirsiniz. `CronManager` motoru sarar ve görevleri arka planda planlar.
+Kalıcı, çoklu-instance güvenli cron; IANA timezone, catch-up, zaman penceresi ve REST API.
+`Pause` = soft disable; `DELETE` = kalıcı silme. `ends_at` dolunca auth’suz auto-pause.
 
 ```go
-import (
-	"log/slog"
-	"os"
-	"github.com/dgmos/flow"
-)
+ctx := context.Background()
+_ = engine.CronManager.Start(ctx)
+defer engine.CronManager.Stop()
 
-// 1. Cron Manager Oluşturun
-logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-cronMgr := flow.NewCronManager(engine, logger)
+id, err := engine.CronManager.AddScheduleWithOpts(ctx, "tenant-a", "db-backup-wf", "0 0 9 * * *", `{"type":"daily"}`, flow.ScheduleOpts{
+	Name:     "sabah-yedek",
+	Timezone: "Europe/Istanbul",
+	CatchUp:  true,
+})
+expr := "0 30 9 * * *"
+_ = engine.CronManager.UpdateSchedule(ctx, "tenant-a", id, flow.ScheduleUpdateOpts{CronExpression: &expr})
 
-// 2. Zamanlama ekleme: namespace, workflowID, cronExpression, girdi parametresi
-_, err := cronMgr.AddSchedule("default", "db-backup-wf", "0 2 * * *", `{"type":"daily"}`)
-
-// 3. Zamanlayıcıyı başlatın
-cronMgr.Start()
-defer cronMgr.Stop()
+api := flow.NewAPIManager(flow.NewWebhookManager(engine)).WithCron(engine.CronManager)
+http.Handle("/", api)
 ```
+
+REST:
+- `GET|POST /api/{namespace}/schedules` (`?active_only=true&limit=&offset=`)
+- `GET|PUT|DELETE /api/{namespace}/schedules/{id}` (PUT kısmi update)
+- `POST /api/{namespace}/schedules/{id}/pause|resume`
+- `POST /api/{namespace}/schedules/preview`
 
 ---
 

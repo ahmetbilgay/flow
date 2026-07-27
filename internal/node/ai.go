@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 )
 
 // AINode represents a node that calls AI APIs (OpenAI, Anthropic, Gemini)
 // Config:
 //   - "provider"      (string) : "openai" | "anthropic" | "gemini"
-//   - "api_key"       (string) : API key for the provider
+//   - "api_key"       (string) : API key for the provider (prefer api_key_env in production)
+//   - "api_key_env"   (string) : Environment variable name holding the API key
 //   - "model"         (string) : Model name (e.g., "gpt-4", "claude-3-sonnet", "gemini-pro")
 //   - "prompt"        (string) : Prompt template with {{.field}} syntax
 //   - "system_prompt" (string) : Optional system message
@@ -22,9 +25,25 @@ import (
 //   - "result_key"    (string) : Key to store AI response (default: "ai_response")
 type AINode struct{}
 
+func resolveAPIKey(config map[string]interface{}) (string, error) {
+	if envName, ok := config["api_key_env"].(string); ok && envName != "" {
+		if key := os.Getenv(envName); key != "" {
+			return key, nil
+		}
+		return "", fmt.Errorf("ai_node: environment variable %q is empty or unset", envName)
+	}
+	if apiKey, ok := config["api_key"].(string); ok && apiKey != "" {
+		return apiKey, nil
+	}
+	return "", fmt.Errorf("ai_node: 'api_key' or 'api_key_env' is required")
+}
+
 func (n *AINode) Execute(ctx context.Context, config map[string]interface{}, input string) (string, error) {
 	provider, _ := config["provider"].(string)
-	apiKey, _ := config["api_key"].(string)
+	apiKey, err := resolveAPIKey(config)
+	if err != nil {
+		return "", err
+	}
 	model, _ := config["model"].(string)
 	promptTemplate, _ := config["prompt"].(string)
 	systemPrompt, _ := config["system_prompt"].(string)
@@ -36,9 +55,6 @@ func (n *AINode) Execute(ctx context.Context, config map[string]interface{}, inp
 
 	if provider == "" {
 		return "", fmt.Errorf("ai_node: 'provider' is required")
-	}
-	if apiKey == "" {
-		return "", fmt.Errorf("ai_node: 'api_key' is required")
 	}
 	if model == "" {
 		return "", fmt.Errorf("ai_node: 'model' is required")
@@ -72,8 +88,12 @@ func (n *AINode) Execute(ctx context.Context, config map[string]interface{}, inp
 		maxTokens = int(m)
 	}
 
-	fmt.Printf("\n🤖 [AI NODE] Provider: %s | Model: %s\n", provider, model)
-	fmt.Printf("   Prompt: %s\n", truncateString(prompt, 150))
+	logger := slog.Default()
+	logger.Info("ai node request",
+		"provider", provider,
+		"model", model,
+		"prompt", truncateString(prompt, 150),
+	)
 
 	var response string
 	switch provider {
@@ -91,7 +111,7 @@ func (n *AINode) Execute(ctx context.Context, config map[string]interface{}, inp
 		return "", fmt.Errorf("ai_node: %w", err)
 	}
 
-	fmt.Printf("   Response: %s\n", truncateString(response, 150))
+	logger.Info("ai node response", "provider", provider, "model", model, "response", truncateString(response, 150))
 
 	// Merge response into output
 	outputMap := make(map[string]interface{})
@@ -117,7 +137,9 @@ func (n *AINode) Validate(config map[string]interface{}) error {
 	}
 
 	if _, ok := config["api_key"].(string); !ok {
-		return fmt.Errorf("ai_node: 'api_key' must be a string")
+		if _, ok := config["api_key_env"].(string); !ok {
+			return fmt.Errorf("ai_node: 'api_key' or 'api_key_env' must be a string")
+		}
 	}
 	if _, ok := config["model"].(string); !ok {
 		return fmt.Errorf("ai_node: 'model' must be a string")

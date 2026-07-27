@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/dgmos/flow/internal/auth"
 	"github.com/dgmos/flow/internal/builder"
 	"github.com/dgmos/flow/internal/engine"
 	"github.com/dgmos/flow/internal/models"
@@ -51,7 +52,6 @@ import (
 	"github.com/dgmos/flow/internal/telemetry"
 	"github.com/dgmos/flow/internal/trigger"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/robfig/cron/v3"
 )
 
 // ========================================
@@ -61,6 +61,7 @@ import (
 // Engine is the workflow execution engine
 type Engine struct {
 	*engine.Engine
+	CronManager *CronManager
 }
 
 // Registry manages workflow function handlers
@@ -92,6 +93,7 @@ type (
 	RetryPolicy    = models.RetryPolicy
 	WorkflowStatus = models.WorkflowStatus
 	TaskStatus     = models.TaskStatus
+	Schedule       = models.Schedule
 )
 
 // Node types (use these strings in Node.Type field)
@@ -172,15 +174,32 @@ func NewEngine(storage Storage, registry *Registry) *Engine {
 	registry.Register("setvariable", &node.SetVariableNode{})
 	registry.Register("humantask", &node.HumanTaskNode{})
 
-	eng := &Engine{engine.NewEngine(storage, registry.Registry)}
+	eng := &Engine{Engine: engine.NewEngine(storage, registry.Registry)}
 	subWFNode.SetEngine(eng)
+	eng.CronManager = &CronManager{CronManager: trigger.NewCronManager(eng.Engine, storage, eng.GetLogger())}
+	eng.CronManager.CronManager.SetEventBus(eng.EventBus())
 
 	return eng
 }
 
-// WithLogger sets a custom logger for the engine
+// WithLogger sets a custom logger for the engine and bound CronManager.
 func (e *Engine) WithLogger(l *slog.Logger) *Engine {
 	e.Engine.WithLogger(l)
+	if e.CronManager != nil {
+		e.CronManager.SetLogger(l)
+	}
+	return e
+}
+
+// AuthProvider is the pluggable authorization interface.
+type AuthProvider = auth.AuthProvider
+
+// SetAuthProvider sets authorization for the engine and CronManager.
+func (e *Engine) SetAuthProvider(provider AuthProvider) *Engine {
+	e.Engine.SetAuthProvider(provider)
+	if e.CronManager != nil {
+		e.CronManager.SetAuthProvider(provider)
+	}
 	return e
 }
 
@@ -207,6 +226,16 @@ func (e *Engine) StartWorkflow(ctx context.Context, namespace, workflowID string
 // GetExecution retrieves an execution by ID
 func (e *Engine) GetExecution(ctx context.Context, namespace, execID string) (*Execution, error) {
 	return e.Engine.GetExecutionStatus(ctx, namespace, execID)
+}
+
+// ListExecutions lists all executions in a namespace.
+func (e *Engine) ListExecutions(ctx context.Context, namespace string) ([]*Execution, error) {
+	return e.Engine.ListExecutions(ctx, namespace)
+}
+
+// CheckAccess runs the configured AuthProvider (no-op when unset).
+func (e *Engine) CheckAccess(ctx context.Context, resource, action string) error {
+	return e.Engine.CheckAccess(ctx, resource, action)
 }
 
 // GetExecutionStatus retrieves an execution's status
@@ -247,13 +276,19 @@ func (e *Engine) StartWorker(ctx context.Context, namespace, workerID string) {
 // SetHostHooks wires a synchronous host integration handler (e.g. WebSocket bridge).
 func (e *Engine) SetHostHooks(h EventHandler) *Engine {
 	e.Engine.SetHostHooks(h)
+	if e.CronManager != nil {
+		e.CronManager.SetHostHooks(h)
+	}
 	return e
 }
 
-// SetEventBus replaces the engine event bus.
+// SetEventBus replaces the engine event bus and rewires CronManager.
 func (e *Engine) SetEventBus(bus *EventBus) *Engine {
 	if bus != nil {
 		e.Engine.SetEventBus(bus.EventBus)
+		if e.CronManager != nil {
+			e.CronManager.SetEventBus(bus)
+		}
 	}
 	return e
 }
@@ -553,20 +588,31 @@ type CronManager struct {
 	*trigger.CronManager
 }
 
-// NewCronManager creates a new cron scheduler
+// ScheduleOpts configures optional schedule create behavior.
+type ScheduleOpts = trigger.ScheduleOpts
+
+// ScheduleUpdateOpts is a partial update patch for schedules.
+type ScheduleUpdateOpts = trigger.ScheduleUpdateOpts
+
+// ScheduleListFilter filters ListSchedules results.
+type ScheduleListFilter = trigger.ScheduleListFilter
+
+// NewCronManager creates a durable cron scheduler backed by storage.
 //
 // Example:
 //
-//	cronMgr := flow.NewCronManager(engine, logger)
-//	cronMgr.Start()
-//	cronMgr.AddSchedule("default", "backup-workflow", "0 2 * * *", `{"type":"daily"}`)
-func NewCronManager(eng *Engine, logger *slog.Logger) *CronManager {
-	return &CronManager{trigger.NewCronManager(eng.Engine, logger)}
+//	cronMgr := flow.NewCronManager(engine, storage, logger)
+//	_ = cronMgr.Start(ctx)
+//	id, _ := cronMgr.AddSchedule(ctx, "default", "backup-workflow", "0 0 2 * * *", `{"type":"daily"}`)
+func NewCronManager(eng *Engine, store Storage, logger *slog.Logger) *CronManager {
+	cm := &CronManager{CronManager: trigger.NewCronManager(eng.Engine, store, logger)}
+	cm.CronManager.SetEventBus(eng.EventBus())
+	return cm
 }
 
-// Start begins the cron scheduler
-func (c *CronManager) Start() {
-	c.CronManager.Start()
+// Start loads active schedules from storage and begins the cron runner.
+func (c *CronManager) Start(ctx context.Context) error {
+	return c.CronManager.Start(ctx)
 }
 
 // Stop halts the cron scheduler
@@ -574,9 +620,71 @@ func (c *CronManager) Stop() {
 	c.CronManager.Stop()
 }
 
-// AddSchedule schedules a workflow with cron expression
-func (c *CronManager) AddSchedule(namespace, workflowID, cronExpr, input string) (cron.EntryID, error) {
-	return c.CronManager.AddSchedule(namespace, workflowID, cronExpr, input)
+// AddSchedule persists and registers a cron trigger; returns durable schedule ID.
+func (c *CronManager) AddSchedule(ctx context.Context, namespace, workflowID, cronExpr, input string) (string, error) {
+	return c.CronManager.AddSchedule(ctx, namespace, workflowID, cronExpr, input)
+}
+
+// AddScheduleWithOpts is AddSchedule with CatchUp and related options.
+func (c *CronManager) AddScheduleWithOpts(ctx context.Context, namespace, workflowID, cronExpr, input string, opts ScheduleOpts) (string, error) {
+	return c.CronManager.AddScheduleWithOpts(ctx, namespace, workflowID, cronExpr, input, opts)
+}
+
+// UpdateSchedule applies a partial patch to an existing schedule.
+func (c *CronManager) UpdateSchedule(ctx context.Context, namespace, scheduleID string, patch ScheduleUpdateOpts) error {
+	return c.CronManager.UpdateSchedule(ctx, namespace, scheduleID, patch)
+}
+
+// PauseSchedule soft-disables a schedule without deleting it.
+func (c *CronManager) PauseSchedule(ctx context.Context, namespace, scheduleID string) error {
+	return c.CronManager.PauseSchedule(ctx, namespace, scheduleID)
+}
+
+// ResumeSchedule reactivates a paused schedule.
+func (c *CronManager) ResumeSchedule(ctx context.Context, namespace, scheduleID string) error {
+	return c.CronManager.ResumeSchedule(ctx, namespace, scheduleID)
+}
+
+// RemoveSchedule deletes a schedule from storage and unregisters it from memory.
+func (c *CronManager) RemoveSchedule(ctx context.Context, namespace, scheduleID string) error {
+	return c.CronManager.RemoveSchedule(ctx, namespace, scheduleID)
+}
+
+// GetSchedule returns a durable schedule definition.
+func (c *CronManager) GetSchedule(ctx context.Context, namespace, scheduleID string) (*Schedule, error) {
+	return c.CronManager.GetSchedule(ctx, namespace, scheduleID)
+}
+
+// ListSchedules lists schedules for a tenant namespace.
+func (c *CronManager) ListSchedules(ctx context.Context, namespace string) ([]*Schedule, error) {
+	return c.CronManager.ListSchedules(ctx, namespace)
+}
+
+// ListSchedulesFiltered lists schedules with optional filters.
+func (c *CronManager) ListSchedulesFiltered(ctx context.Context, namespace string, filter ScheduleListFilter) ([]*Schedule, error) {
+	return c.CronManager.ListSchedulesFiltered(ctx, namespace, filter)
+}
+
+// PreviewNextRuns returns upcoming fire times for a cron expression (UI helper).
+func (c *CronManager) PreviewNextRuns(cronExpr, timezone string, n int) ([]time.Time, error) {
+	return c.CronManager.PreviewNextRuns(cronExpr, timezone, n)
+}
+
+// SetAuthProvider sets authorization checks for schedule operations.
+func (c *CronManager) SetAuthProvider(provider AuthProvider) {
+	c.CronManager.SetAuthProvider(provider)
+}
+
+// SetHostHooks wires sync host integration for schedule events.
+func (c *CronManager) SetHostHooks(h EventHandler) {
+	c.CronManager.SetHostHooks(h)
+}
+
+// SetEventBus wires schedule.* lifecycle events.
+func (c *CronManager) SetEventBus(bus *EventBus) {
+	if bus != nil {
+		c.CronManager.SetEventBus(bus.EventBus)
+	}
 }
 
 // WebhookManager handles HTTP webhook triggers
@@ -606,21 +714,38 @@ type APIManager struct {
 	*trigger.APIManager
 }
 
-// NewAPIManager creates a REST API handler
+// NewAPIManager creates a REST API handler.
 //
 // Example:
 //
-//	apiMgr := flow.NewAPIManager(webhookMgr)
+//	apiMgr := flow.NewAPIManager(webhookMgr).WithCron(engine.CronManager)
 //	http.Handle("/", apiMgr)
 //
 // Endpoints:
 //   - GET /health
 //   - GET /metrics (Prometheus)
+//   - GET /api/{namespace}/executions
 //   - GET /api/{namespace}/executions/{id}
+//   - GET /api/{namespace}/executions/{id}/steps
 //   - POST /api/{namespace}/executions/{id}/cancel
 //   - POST /api/{namespace}/executions/{id}/signal/{nodeID}
+//   - POST /api/{namespace}/executions/{id}/rollback
+//   - POST /api/{namespace}/executions/{id}/tasks/{nodeId}/claim|release|complete|advance
+//   - GET /api/{namespace}/tasks
+//   - GET|POST /api/{namespace}/schedules
+//   - GET|PUT|DELETE /api/{namespace}/schedules/{id}
+//   - POST /api/{namespace}/schedules/{id}/pause|resume
+//   - POST /api/{namespace}/schedules/preview
 func NewAPIManager(webhookMgr *WebhookManager) *APIManager {
-	return &APIManager{trigger.NewAPIManager(webhookMgr.WebhookManager)}
+	return &APIManager{APIManager: trigger.NewAPIManager(webhookMgr.WebhookManager)}
+}
+
+// WithCron enables schedule management REST endpoints.
+func (a *APIManager) WithCron(c *CronManager) *APIManager {
+	if c != nil {
+		a.APIManager.SetCronManager(c.CronManager)
+	}
+	return a
 }
 
 // ServeHTTP handles API requests
@@ -652,6 +777,13 @@ const (
 	EventTaskCompleted         = engine.EventTypeTaskCompleted
 	EventCompensationTriggered = engine.EventTypeCompensationTriggered
 	EventRollbackStarted       = engine.EventTypeRollbackStarted
+	EventScheduleCreated       = engine.EventTypeScheduleCreated
+	EventScheduleUpdated       = engine.EventTypeScheduleUpdated
+	EventSchedulePaused        = engine.EventTypeSchedulePaused
+	EventScheduleResumed       = engine.EventTypeScheduleResumed
+	EventScheduleDeleted       = engine.EventTypeScheduleDeleted
+	EventScheduleFired         = engine.EventTypeScheduleFired
+	EventScheduleFireFailed    = engine.EventTypeScheduleFireFailed
 )
 
 // Event represents a workflow event
@@ -710,11 +842,13 @@ var (
 	StepsProcessed     = telemetry.StepsProcessed
 	StepDuration       = telemetry.StepDuration
 	ActiveWorkers      = telemetry.ActiveWorkers
+	SchedulesActive    = telemetry.SchedulesActive
+	ScheduleFires      = telemetry.ScheduleFires
 )
 
-// MetricsRegistry returns the Prometheus registry
-func MetricsRegistry() *prometheus.Registry {
-	return prometheus.DefaultRegisterer.(*prometheus.Registry)
+// MetricsRegistry returns the default Prometheus registerer.
+func MetricsRegistry() prometheus.Registerer {
+	return prometheus.DefaultRegisterer
 }
 
 // ========================================

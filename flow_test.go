@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -166,10 +167,11 @@ func TestMemoryStorageExecutionSteps(t *testing.T) {
 }
 
 func TestRedisStorage(t *testing.T) {
-	storage := flow.NewRedisStorage("localhost:6379", "", 0)
+	storage := flow.NewRedisStorage("localhost:6379", "", 15)
 	if storage == nil {
 		t.Fatal("NewRedisStorage returned nil")
 	}
+	// Real connectivity is covered by redis_integration_test.go (go test -tags=integration).
 }
 
 // ============================================
@@ -815,15 +817,320 @@ func TestCronManager(t *testing.T) {
 	engine := flow.NewEngine(storage, registry)
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	cronMgr := flow.NewCronManager(engine, logger)
+	cronMgr := flow.NewCronManager(engine, storage, logger)
 
 	if cronMgr == nil {
 		t.Fatal("NewCronManager returned nil")
 	}
+	if engine.CronManager == nil {
+		t.Fatal("engine.CronManager should be initialized by NewEngine")
+	}
 
-	cronMgr.Start()
-	time.Sleep(100 * time.Millisecond)
+	ctx := context.Background()
+	if err := cronMgr.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer cronMgr.Stop()
+
+	registry.RegisterFunction("noop", func(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"ok": true}, nil
+	})
+	wf := &flow.Workflow{
+		ID:      "cron-wf",
+		Name:    "Cron WF",
+		Version: 1,
+		Nodes: []flow.Node{
+			{ID: "n1", Type: flow.NodeTypeFunction, Config: map[string]interface{}{"function": "noop"}},
+		},
+	}
+	if err := engine.RegisterWorkflow(ctx, "tenant-a", wf); err != nil {
+		t.Fatalf("RegisterWorkflow: %v", err)
+	}
+
+	id, err := cronMgr.AddSchedule(ctx, "tenant-a", "cron-wf", "0 0 2 * * *", `{"from":"cron"}`)
+	if err != nil {
+		t.Fatalf("AddSchedule: %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected schedule id")
+	}
+
+	got, err := cronMgr.GetSchedule(ctx, "tenant-a", id)
+	if err != nil {
+		t.Fatalf("GetSchedule: %v", err)
+	}
+	if got.WorkflowID != "cron-wf" || !got.IsActive || got.NextRunAt == nil {
+		t.Fatalf("unexpected schedule: %+v", got)
+	}
+
+	cronExpr := "0 30 3 * * *"
+	input := `{"v":2}`
+	catchUp := true
+	if err := cronMgr.UpdateSchedule(ctx, "tenant-a", id, flow.ScheduleUpdateOpts{
+		CronExpression: &cronExpr,
+		Input:          &input,
+		CatchUp:        &catchUp,
+	}); err != nil {
+		t.Fatalf("UpdateSchedule: %v", err)
+	}
+	got, _ = cronMgr.GetSchedule(ctx, "tenant-a", id)
+	if got.CronExpression != "0 30 3 * * *" || !got.CatchUp {
+		t.Fatalf("update not applied: %+v", got)
+	}
+
+	if err := cronMgr.PauseSchedule(ctx, "tenant-a", id); err != nil {
+		t.Fatalf("PauseSchedule: %v", err)
+	}
+	got, _ = cronMgr.GetSchedule(ctx, "tenant-a", id)
+	if got.IsActive {
+		t.Fatal("expected paused")
+	}
+
+	if err := cronMgr.ResumeSchedule(ctx, "tenant-a", id); err != nil {
+		t.Fatalf("ResumeSchedule: %v", err)
+	}
+	got, _ = cronMgr.GetSchedule(ctx, "tenant-a", id)
+	if !got.IsActive {
+		t.Fatal("expected active after resume")
+	}
+
+	list, err := cronMgr.ListSchedules(ctx, "tenant-a")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListSchedules: %v len=%d", err, len(list))
+	}
+
+	if err := cronMgr.RemoveSchedule(ctx, "tenant-a", id); err != nil {
+		t.Fatalf("RemoveSchedule: %v", err)
+	}
+	if _, err := storage.GetSchedule(ctx, "tenant-a", id); err == nil {
+		t.Fatal("expected schedule to be deleted")
+	}
+}
+
+func TestCronManagerReloadFromStorage(t *testing.T) {
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	schedID := "sched-reload-1"
+	if err := storage.SaveSchedule(ctx, &flow.Schedule{
+		ID:             schedID,
+		Namespace:      "tenant-a",
+		WorkflowID:     "wf-1",
+		CronExpression: "0 */5 * * * *",
+		Input:          `{}`,
+		IsActive:       true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("SaveSchedule: %v", err)
+	}
+
+	cronMgr := flow.NewCronManager(engine, storage, slog.Default())
+	if err := cronMgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 	cronMgr.Stop()
+}
+
+func TestCronManagerFireAndClaim(t *testing.T) {
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+	ctx := context.Background()
+
+	registry.RegisterFunction("tick", func(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"ok": true}, nil
+	})
+	wf := &flow.Workflow{
+		ID: "tick-wf", Name: "Tick", Version: 1,
+		Nodes: []flow.Node{{ID: "n1", Type: flow.NodeTypeFunction, Config: map[string]interface{}{"function": "tick"}}},
+	}
+	_ = engine.RegisterWorkflow(ctx, "default", wf)
+
+	cronMgr := flow.NewCronManager(engine, storage, slog.Default())
+	_ = cronMgr.Start(ctx)
+	defer cronMgr.Stop()
+
+	id, err := cronMgr.AddSchedule(ctx, "default", "tick-wf", "* * * * * *", `{}`)
+	if err != nil {
+		t.Fatalf("AddSchedule: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var lastExec string
+	for time.Now().Before(deadline) {
+		got, err := storage.GetSchedule(ctx, "default", id)
+		if err == nil && got.LastExecID != "" {
+			lastExec = got.LastExecID
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if lastExec == "" {
+		t.Fatal("expected cron fire to record LastExecID")
+	}
+	if _, err := engine.GetExecution(ctx, "default", lastExec); err != nil {
+		t.Fatalf("execution not found: %v", err)
+	}
+
+	// Dual claim on a fresh future fireAt: only one winner
+	fireAt := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	ok1, err := storage.TryClaimScheduleRun(ctx, "default", id, fireAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok2, err := storage.TryClaimScheduleRun(ctx, "default", id, fireAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok1 || ok2 {
+		t.Fatalf("expected first claim win and second lose, got %v %v", ok1, ok2)
+	}
+}
+
+func TestCronManagerPreviewAndAPI(t *testing.T) {
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+	ctx := context.Background()
+
+	registry.RegisterFunction("noop", func(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"ok": true}, nil
+	})
+	_ = engine.RegisterWorkflow(ctx, "ns", &flow.Workflow{
+		ID: "wf", Name: "WF", Version: 1,
+		Nodes: []flow.Node{{ID: "n1", Type: flow.NodeTypeFunction, Config: map[string]interface{}{"function": "noop"}}},
+	})
+
+	next, err := engine.CronManager.PreviewNextRuns("0 0 9 * * *", "Europe/Istanbul", 3)
+	if err != nil || len(next) != 3 {
+		t.Fatalf("PreviewNextRuns: %v len=%d", err, len(next))
+	}
+
+	_ = engine.CronManager.Start(ctx)
+	defer engine.CronManager.Stop()
+
+	id, err := engine.CronManager.AddScheduleWithOpts(ctx, "ns", "wf", "0 0 9 * * *", `{}`, flow.ScheduleOpts{
+		Name:     "morning",
+		Timezone: "Europe/Istanbul",
+		CatchUp:  true,
+	})
+	if err != nil {
+		t.Fatalf("AddScheduleWithOpts: %v", err)
+	}
+	got, _ := engine.CronManager.GetSchedule(ctx, "ns", id)
+	if got.Timezone != "Europe/Istanbul" || got.Name != "morning" {
+		t.Fatalf("unexpected schedule: %+v", got)
+	}
+
+	api := flow.NewAPIManager(flow.NewWebhookManager(engine)).WithCron(engine.CronManager)
+	req := httptest.NewRequest(http.MethodGet, "/api/ns/schedules?active_only=true", nil)
+	rr := httptest.NewRecorder()
+	api.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list schedules status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/ns/schedules/"+id+"/pause", nil)
+	rr = httptest.NewRecorder()
+	api.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("pause status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCronManagerPartialUpdateAndExpire(t *testing.T) {
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+	ctx := context.Background()
+	registry.RegisterFunction("noop", func(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"ok": true}, nil
+	})
+	_ = engine.RegisterWorkflow(ctx, "ns", &flow.Workflow{
+		ID: "wf", Name: "WF", Version: 1,
+		Nodes: []flow.Node{{ID: "n1", Type: flow.NodeTypeFunction, Config: map[string]interface{}{"function": "noop"}}},
+	})
+	_ = engine.CronManager.Start(ctx)
+	defer engine.CronManager.Stop()
+
+	id, err := engine.CronManager.AddScheduleWithOpts(ctx, "ns", "wf", "0 0 9 * * *", `{"a":1}`, flow.ScheduleOpts{
+		Name: "keep-me", Timezone: "UTC", CatchUp: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Partial update: only cron expression; name/catch_up must remain
+	expr := "0 30 9 * * *"
+	if err := engine.CronManager.UpdateSchedule(ctx, "ns", id, flow.ScheduleUpdateOpts{CronExpression: &expr}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := engine.CronManager.GetSchedule(ctx, "ns", id)
+	if got.Name != "keep-me" || !got.CatchUp || got.CronExpression != expr {
+		t.Fatalf("partial update wiped fields: %+v", got)
+	}
+
+	// Expired ends_at must not appear in GetActiveSchedules
+	past := time.Now().UTC().Add(-time.Hour)
+	if err := storage.SaveSchedule(ctx, &flow.Schedule{
+		ID: "expired-1", Namespace: "ns", WorkflowID: "wf", CronExpression: "0 0 1 * * *",
+		Timezone: "UTC", IsActive: true, EndsAt: &past, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active, _ := storage.GetActiveSchedules(ctx)
+	for _, s := range active {
+		if s.ID == "expired-1" {
+			t.Fatal("expired schedule should not be active")
+		}
+	}
+}
+
+func TestCronManagerStopClearsEntries(t *testing.T) {
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+	ctx := context.Background()
+	registry.RegisterFunction("noop", func(ctx context.Context, input map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"ok": true}, nil
+	})
+	_ = engine.RegisterWorkflow(ctx, "ns", &flow.Workflow{
+		ID: "wf", Name: "WF", Version: 1,
+		Nodes: []flow.Node{{ID: "n1", Type: flow.NodeTypeFunction, Config: map[string]interface{}{"function": "noop"}}},
+	})
+	_ = engine.CronManager.Start(ctx)
+	_, _ = engine.CronManager.AddSchedule(ctx, "ns", "wf", "0 0 2 * * *", `{}`)
+	engine.CronManager.Stop()
+	// Restart should load from storage without panic / double-register
+	if err := engine.CronManager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	engine.CronManager.Stop()
+}
+
+func TestCronManagerAuth(t *testing.T) {
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+	ctx := context.Background()
+
+	denied := &denyAllAuth{}
+	engine.SetAuthProvider(denied)
+
+	_, err := engine.CronManager.AddSchedule(ctx, "ns", "wf", "0 0 2 * * *", `{}`)
+	if err == nil {
+		t.Fatal("expected auth denial")
+	}
+}
+
+type denyAllAuth struct{}
+
+func (d *denyAllAuth) CheckAccess(ctx context.Context, resource, action string) error {
+	return fmt.Errorf("denied")
 }
 
 func TestWebhookManager(t *testing.T) {
@@ -1881,4 +2188,89 @@ func TestWorkerPanicRecovery(t *testing.T) {
 	}
 
 	t.Logf("✅ Worker recovered from panic successfully: %s", steps[0].Error)
+}
+
+func TestReapTimeoutsMarksExpiredWaitingStep(t *testing.T) {
+	ctx := context.Background()
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+
+	wf := &flow.Workflow{
+		ID: "ht-timeout", Name: "ht", Version: 1,
+		Nodes: []flow.Node{{
+			ID: "approve", Type: flow.NodeTypeHumanTask, Name: "Approve",
+			Config: map[string]interface{}{
+				"assignees": []string{"u1"},
+				"timeout":   "50ms",
+			},
+		}},
+	}
+	_ = engine.RegisterWorkflow(ctx, "default", wf)
+	execID, err := engine.StartWorkflow(ctx, "default", "ht-timeout", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(80 * time.Millisecond)
+	if err := engine.ReapTimeouts(ctx, "default"); err != nil {
+		t.Fatal(err)
+	}
+
+	steps, _ := engine.GetExecutionSteps(ctx, "default", execID)
+	if len(steps) != 1 || steps[0].Status != flow.StatusFailed {
+		t.Fatalf("expected failed step, got %#v", steps)
+	}
+	if steps[0].Error != "SIGNAL_TIMEOUT" {
+		t.Fatalf("unexpected error: %s", steps[0].Error)
+	}
+}
+
+func TestAPIExecutionsAndTasks(t *testing.T) {
+	ctx := context.Background()
+	storage := flow.NewMemoryStorage()
+	registry := flow.NewRegistry()
+	engine := flow.NewEngine(storage, registry)
+
+	wf := &flow.Workflow{
+		ID: "ht-api", Name: "HT", Version: 1,
+		Nodes: []flow.Node{{
+			ID: "approve", Type: flow.NodeTypeHumanTask, Name: "Approve",
+			Config: map[string]interface{}{"assignees": []string{"u1"}},
+		}},
+	}
+	_ = engine.RegisterWorkflow(ctx, "default", wf)
+	execID, _ := engine.StartWorkflow(ctx, "default", "ht-api", `{}`)
+
+	api := flow.NewAPIManager(flow.NewWebhookManager(engine))
+
+	// List executions
+	req := httptest.NewRequest(http.MethodGet, "/api/default/executions", nil)
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list executions: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// List tasks
+	req = httptest.NewRequest(http.MethodGet, "/api/default/tasks?assignee=u1", nil)
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list tasks: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Complete via API
+	body := strings.NewReader(`{"actor":"u1","action":"approve","payload":"{}"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/default/executions/"+execID+"/tasks/approve/complete", body)
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete task: %d %s", rec.Code, rec.Body.String())
+	}
+
+	exec, _ := engine.GetExecution(ctx, "default", execID)
+	if exec.Status != flow.StatusCompleted {
+		t.Fatalf("expected completed, got %s", exec.Status)
+	}
 }

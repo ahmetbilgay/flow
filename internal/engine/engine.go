@@ -45,6 +45,22 @@ func (e *Engine) SetAuthProvider(provider auth.AuthProvider) *Engine {
 	return e
 }
 
+// CheckAccess runs the configured AuthProvider (no-op when unset).
+func (e *Engine) CheckAccess(ctx context.Context, resource, action string) error {
+	if e.authProvider == nil {
+		return nil
+	}
+	return e.authProvider.CheckAccess(ctx, resource, action)
+}
+
+func (e *Engine) checkExecutionAccess(ctx context.Context, namespace, execID, action string) error {
+	return e.CheckAccess(ctx, fmt.Sprintf("execution:%s:%s", namespace, execID), action)
+}
+
+func (e *Engine) checkTaskAccess(ctx context.Context, namespace, nodeID, action string) error {
+	return e.CheckAccess(ctx, fmt.Sprintf("task:%s:%s", namespace, nodeID), action)
+}
+
 // SetEventBus replaces the engine event bus (async handlers).
 func (e *Engine) SetEventBus(bus *EventBus) *Engine {
 	if bus != nil {
@@ -239,6 +255,9 @@ func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, o
 }
 
 func (e *Engine) CancelExecution(ctx context.Context, namespace string, execID string) error {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "cancel"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
 	exec, err := e.storage.GetExecution(ctx, namespace, execID)
 	if err != nil {
 		return err
@@ -269,6 +288,9 @@ func (e *Engine) FailExecution(ctx context.Context, namespace string, execID str
 }
 
 func (e *Engine) SignalExecution(ctx context.Context, namespace string, execID string, nodeID string, output string) error {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "signal"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
 	steps, err := e.storage.GetExecutionSteps(ctx, namespace, execID)
 	if err != nil {
 		return err
@@ -413,60 +435,80 @@ func (e *Engine) skipNode(ctx context.Context, exec *models.Execution, g *Graph,
 	}
 }
 
-// ReapTimeouts checks for WAITING steps that have passed their timeout period
+// ReapTimeouts checks for WAITING steps that have passed their timeout period.
 func (e *Engine) ReapTimeouts(ctx context.Context, namespace string) error {
-	// For simplicity in this version, we list all executions and their steps.
-	// In production, we would use a more efficient query or a TTL index in Redis.
-	execs, err := e.storage.ListExecutions(ctx, namespace)
+	waiting, err := e.storage.ListWaitingSteps(ctx, namespace, storage.TaskFilter{})
 	if err != nil {
 		return err
 	}
 
-	for _, exec := range execs {
+	execCache := make(map[string]*models.Execution)
+	wfCache := make(map[string]*models.Workflow)
+
+	for _, step := range waiting {
+		exec, ok := execCache[step.ExecutionID]
+		if !ok {
+			exec, err = e.storage.GetExecution(ctx, namespace, step.ExecutionID)
+			if err != nil {
+				continue
+			}
+			execCache[step.ExecutionID] = exec
+		}
 		if exec.Status != models.TaskRunning {
 			continue
 		}
-		steps, err := e.storage.GetExecutionSteps(ctx, namespace, exec.ID)
-		if err != nil {
+
+		wf, ok := wfCache[exec.WorkflowID]
+		if !ok {
+			wf, err = e.storage.GetWorkflow(ctx, namespace, exec.WorkflowID)
+			if err != nil {
+				e.logger.Error("Failed to get workflow for reaper", "workflow", exec.WorkflowID, "error", err)
+				continue
+			}
+			wfCache[exec.WorkflowID] = wf
+		}
+
+		n := FindNode(wf, step.NodeID)
+		if n == nil {
 			continue
 		}
-		for _, step := range steps {
-			if step.Status == models.TaskWaiting {
-				// Get node config to find timeout
-				wf, err := e.storage.GetWorkflow(ctx, namespace, exec.WorkflowID)
-				if err != nil {
-					e.logger.Error("Failed to get workflow for reaper", "workflow", exec.WorkflowID, "error", err)
-					continue
-				}
-				for _, n := range wf.Nodes {
-					if n.ID == step.NodeID {
-						if timeoutStr, ok := n.Config["timeout"].(string); ok {
-							timeout, err := time.ParseDuration(timeoutStr)
-							if err == nil {
-								if time.Since(step.UpdatedAt) > timeout {
-									e.logger.Warn("Step timed out waiting for signal", "step", step.ID, "node", step.NodeID)
-									step.Status = models.TaskFailed
-									step.Error = "SIGNAL_TIMEOUT"
-									now := time.Now()
-									step.FinishedAt = &now
-									if err := e.storage.UpdateExecutionStep(ctx, namespace, step); err != nil {
-										e.logger.Error("Failed to update timed out step", "step", step.ID, "error", err)
-									}
-									if err := e.checkAndFinishExecution(ctx, exec); err != nil {
-										e.logger.Error("Failed to finish execution after timeout", "execution", exec.ID, "error", err)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+		timeoutStr, ok := n.Config["timeout"].(string)
+		if !ok {
+			continue
+		}
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil || time.Since(step.UpdatedAt) <= timeout {
+			continue
+		}
+
+		e.logger.Warn("Step timed out waiting for signal", "step", step.ID, "node", step.NodeID)
+		step.Status = models.TaskFailed
+		step.Error = "SIGNAL_TIMEOUT"
+		now := time.Now()
+		step.FinishedAt = &now
+		if err := e.storage.UpdateExecutionStep(ctx, namespace, step); err != nil {
+			e.logger.Error("Failed to update timed out step", "step", step.ID, "error", err)
+			continue
+		}
+		if err := e.checkAndFinishExecution(ctx, exec); err != nil {
+			e.logger.Error("Failed to finish execution after timeout", "execution", exec.ID, "error", err)
 		}
 	}
 	return nil
 }
 
+// ListExecutions returns all executions in a namespace.
+func (e *Engine) ListExecutions(ctx context.Context, namespace string) ([]*models.Execution, error) {
+	if err := e.CheckAccess(ctx, fmt.Sprintf("execution:%s:*", namespace), "view"); err != nil {
+		return nil, fmt.Errorf("access denied: %w", err)
+	}
+	return e.storage.ListExecutions(ctx, namespace)
+}
+
 func (e *Engine) GetExecutionStatus(ctx context.Context, namespace string, execID string) (*models.Execution, error) {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "view"); err != nil {
+		return nil, fmt.Errorf("access denied: %w", err)
+	}
 	return e.storage.GetExecution(ctx, namespace, execID)
 }
 

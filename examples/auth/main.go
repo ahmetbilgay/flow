@@ -94,7 +94,7 @@ func main() {
 
 	// 2. Set auth provider
 	authProvider := &MyMultiTenantAuth{}
-	// engine.SetAuthProvider(authProvider) // We'll implement this
+	engine.SetAuthProvider(authProvider)
 
 	fmt.Println("✅ Multi-tenant auth example")
 

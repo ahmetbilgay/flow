@@ -320,3 +320,201 @@ func (r *RedisStorage) ListCompensationRecords(ctx context.Context, namespace, e
 	}
 	return out, nil
 }
+
+func scheduleKey(ns, id string) string { return fmt.Sprintf("sched:%s:%s", ns, id) }
+func scheduleActiveSet() string         { return "schedules:active" }
+func scheduleNSSet(ns string) string    { return fmt.Sprintf("schedules:%s", ns) }
+
+func (r *RedisStorage) SaveSchedule(ctx context.Context, sched *models.Schedule) error {
+	now := time.Now().UTC()
+	if sched.CreatedAt.IsZero() {
+		sched.CreatedAt = now
+	}
+	sched.UpdatedAt = now
+	data, err := json.Marshal(sched)
+	if err != nil {
+		return err
+	}
+	key := scheduleKey(sched.Namespace, sched.ID)
+	if err := r.client.Set(ctx, key, data, 0).Err(); err != nil {
+		return fmt.Errorf("redis_storage: failed to save schedule: %w", err)
+	}
+	_ = r.client.SAdd(ctx, scheduleNSSet(sched.Namespace), sched.ID).Err()
+	member := fmt.Sprintf("%s:%s", sched.Namespace, sched.ID)
+	if sched.IsActive {
+		if err := r.client.SAdd(ctx, scheduleActiveSet(), member).Err(); err != nil {
+			return err
+		}
+	} else {
+		_ = r.client.SRem(ctx, scheduleActiveSet(), member).Err()
+	}
+	return nil
+}
+
+func (r *RedisStorage) DeleteSchedule(ctx context.Context, namespace, id string) error {
+	key := scheduleKey(namespace, id)
+	n, err := r.client.Del(ctx, key).Result()
+	if err != nil {
+		return fmt.Errorf("redis_storage: failed to delete schedule: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("redis_storage: schedule not found: namespace=%s, id=%s", namespace, id)
+	}
+	_ = r.client.SRem(ctx, scheduleNSSet(namespace), id).Err()
+	_ = r.client.SRem(ctx, scheduleActiveSet(), fmt.Sprintf("%s:%s", namespace, id)).Err()
+	_ = r.client.Del(ctx, scheduleClaimKey(namespace, id)).Err()
+	return nil
+}
+
+func (r *RedisStorage) GetActiveSchedules(ctx context.Context) ([]*models.Schedule, error) {
+	members, err := r.client.SMembers(ctx, scheduleActiveSet()).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis_storage: failed to list active schedules: %w", err)
+	}
+	now := time.Now().UTC()
+	var out []*models.Schedule
+	for _, member := range members {
+		ns, id, ok := splitNSID(member)
+		if !ok {
+			continue
+		}
+		sched, err := r.GetSchedule(ctx, ns, id)
+		if err != nil || sched == nil || !sched.IsActive {
+			continue
+		}
+		if sched.EndsAt != nil && !sched.EndsAt.After(now) {
+			continue
+		}
+		out = append(out, sched)
+	}
+	return out, nil
+}
+
+func (r *RedisStorage) GetSchedule(ctx context.Context, namespace, id string) (*models.Schedule, error) {
+	data, err := r.client.Get(ctx, scheduleKey(namespace, id)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, fmt.Errorf("redis_storage: schedule not found")
+		}
+		return nil, fmt.Errorf("redis_storage: failed to get schedule: %w", err)
+	}
+	var sched models.Schedule
+	if err := json.Unmarshal(data, &sched); err != nil {
+		return nil, err
+	}
+	return &sched, nil
+}
+
+func (r *RedisStorage) ListSchedules(ctx context.Context, namespace string, filter storage.ScheduleFilter) ([]*models.Schedule, error) {
+	ids, err := r.client.SMembers(ctx, scheduleNSSet(namespace)).Result()
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.Schedule
+	for _, id := range ids {
+		sched, err := r.GetSchedule(ctx, namespace, id)
+		if err != nil {
+			continue
+		}
+		if filter.ActiveOnly && !sched.IsActive {
+			continue
+		}
+		out = append(out, sched)
+	}
+	if filter.Offset > 0 {
+		if filter.Offset >= len(out) {
+			return []*models.Schedule{}, nil
+		}
+		out = out[filter.Offset:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+func scheduleClaimKey(ns, id string) string {
+	return fmt.Sprintf("sched:lastfire:%s:%s", ns, id)
+}
+
+func (r *RedisStorage) TryClaimScheduleRun(ctx context.Context, namespace, id string, fireAt time.Time) (bool, error) {
+	fireAt = fireAt.UTC().Truncate(time.Second)
+	sched, err := r.GetSchedule(ctx, namespace, id)
+	if err != nil || sched == nil || !sched.IsActive {
+		return false, nil
+	}
+	claimKey := scheduleClaimKey(namespace, id)
+	fireUnix := fireAt.Unix()
+	// Atomic claim + persist last_run_at into schedule JSON in one Lua script.
+	script := redis.NewScript(`
+local cur = redis.call('GET', KEYS[1])
+local fire = tonumber(ARGV[1])
+if cur ~= false and tonumber(cur) >= fire then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1])
+local raw = redis.call('GET', KEYS[2])
+if raw ~= false then
+  local ok, obj = pcall(cjson.decode, raw)
+  if ok then
+    obj['last_run_at'] = ARGV[2]
+    obj['updated_at'] = ARGV[2]
+    redis.call('SET', KEYS[2], cjson.encode(obj))
+  end
+end
+return 1
+`)
+	fireRFC := fireAt.Format(time.RFC3339Nano)
+	res, err := script.Run(ctx, r.client, []string{claimKey, scheduleKey(namespace, id)}, fireUnix, fireRFC).Int()
+	if err != nil {
+		// Fallback without cjson mutation if Redis lacks cjson
+		script2 := redis.NewScript(`
+local cur = redis.call('GET', KEYS[1])
+local fire = tonumber(ARGV[1])
+if cur == false or tonumber(cur) < fire then
+  redis.call('SET', KEYS[1], ARGV[1])
+  return 1
+end
+return 0
+`)
+		res, err = script2.Run(ctx, r.client, []string{claimKey}, fireUnix).Int()
+		if err != nil {
+			return false, fmt.Errorf("redis_storage: claim schedule run failed: %w", err)
+		}
+		if res == 1 {
+			t := fireAt
+			sched.LastRunAt = &t
+			sched.UpdatedAt = time.Now().UTC()
+			_ = r.SaveSchedule(ctx, sched)
+		}
+		return res == 1, nil
+	}
+	return res == 1, nil
+}
+
+func (r *RedisStorage) RecordScheduleRun(ctx context.Context, namespace, id string, fireAt time.Time, execID, lastErr string, nextRun *time.Time) error {
+	sched, err := r.GetSchedule(ctx, namespace, id)
+	if err != nil {
+		return err
+	}
+	t := fireAt.UTC().Truncate(time.Second)
+	sched.LastRunAt = &t
+	sched.LastExecID = execID
+	sched.LastError = lastErr
+	if nextRun != nil {
+		n := nextRun.UTC()
+		sched.NextRunAt = &n
+	} else {
+		sched.NextRunAt = nil
+	}
+	return r.SaveSchedule(ctx, sched)
+}
+
+func splitNSID(member string) (ns, id string, ok bool) {
+	for i := 0; i < len(member); i++ {
+		if member[i] == ':' {
+			return member[:i], member[i+1:], true
+		}
+	}
+	return "", "", false
+}

@@ -17,14 +17,16 @@ We love new ideas! If you have a suggestion for an enhancement, please open an i
 ### Pull Requests
 1. Fork the repo and create your branch from `main`.
 2. If you've added code that should be tested, add tests.
-3. Ensure the test suite passes (`go test ./...`).
-4. Make sure your code is linted.
-5. Issue the Pull Request!
+3. Ensure unit tests pass: `go test ./... -race`
+4. Run integration tests when touching storage/triggers: `bash scripts/test-integration.sh`
+5. Make sure your code is linted (`golangci-lint run ./...`).
+6. Issue the Pull Request!
 
 ## Development Setup
 1. Clone the repo.
-2. Run `docker-compose up -d` to start databases.
-3. Run tests using `go test ./...`.
+2. Run `docker compose up -d` to start MySQL, PostgreSQL, and Redis.
+3. Unit tests: `go test ./... -race`
+4. Integration / E2E: `bash scripts/test-integration.sh` (or `go test -tags=integration ./...`)
 
 ---
 Happy coding!

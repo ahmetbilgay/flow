@@ -16,6 +16,7 @@ type MemoryStorage struct {
 	executions          map[string]*models.Execution
 	executionSteps      map[string]*models.ExecutionStep
 	compensationJournal []*models.CompensationRecord
+	schedules           map[string]*models.Schedule
 	ZombieThreshold     time.Duration
 }
 
@@ -25,6 +26,7 @@ func NewMemoryStorage() *MemoryStorage {
 		executions:          make(map[string]*models.Execution),
 		executionSteps:      make(map[string]*models.ExecutionStep),
 		compensationJournal: make([]*models.CompensationRecord, 0),
+		schedules:           make(map[string]*models.Schedule),
 		ZombieThreshold:     5 * time.Minute,
 	}
 }
@@ -247,4 +249,147 @@ func (s *MemoryStorage) ListCompensationRecords(ctx context.Context, namespace, 
 		}
 	}
 	return out, nil
+}
+
+func scheduleKey(namespace, id string) string {
+	return fmt.Sprintf("%s:%s", namespace, id)
+}
+
+func (s *MemoryStorage) SaveSchedule(ctx context.Context, sched *models.Schedule) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if sched.CreatedAt.IsZero() {
+		sched.CreatedAt = now
+	}
+	sched.UpdatedAt = now
+	if sched.Timezone == "" {
+		sched.Timezone = "UTC"
+	}
+	s.schedules[scheduleKey(sched.Namespace, sched.ID)] = cloneSchedule(sched)
+	return nil
+}
+
+func (s *MemoryStorage) DeleteSchedule(ctx context.Context, namespace, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scheduleKey(namespace, id)
+	if _, ok := s.schedules[key]; !ok {
+		return fmt.Errorf("schedule not found: namespace=%s, id=%s", namespace, id)
+	}
+	delete(s.schedules, key)
+	return nil
+}
+
+func (s *MemoryStorage) GetActiveSchedules(ctx context.Context) ([]*models.Schedule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now().UTC()
+	var out []*models.Schedule
+	for _, sched := range s.schedules {
+		if !sched.IsActive {
+			continue
+		}
+		if sched.EndsAt != nil && !sched.EndsAt.After(now) {
+			continue
+		}
+		out = append(out, cloneSchedule(sched))
+	}
+	return out, nil
+}
+
+func (s *MemoryStorage) GetSchedule(ctx context.Context, namespace, id string) (*models.Schedule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sched, ok := s.schedules[scheduleKey(namespace, id)]
+	if !ok {
+		return nil, fmt.Errorf("schedule not found")
+	}
+	return cloneSchedule(sched), nil
+}
+
+func (s *MemoryStorage) ListSchedules(ctx context.Context, namespace string, filter storage.ScheduleFilter) ([]*models.Schedule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.Schedule
+	for _, sched := range s.schedules {
+		if sched.Namespace != namespace {
+			continue
+		}
+		if filter.ActiveOnly && !sched.IsActive {
+			continue
+		}
+		out = append(out, cloneSchedule(sched))
+	}
+	if filter.Offset > 0 {
+		if filter.Offset >= len(out) {
+			return []*models.Schedule{}, nil
+		}
+		out = out[filter.Offset:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+func (s *MemoryStorage) TryClaimScheduleRun(ctx context.Context, namespace, id string, fireAt time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fireAt = fireAt.UTC().Truncate(time.Second)
+	key := scheduleKey(namespace, id)
+	sched, ok := s.schedules[key]
+	if !ok || !sched.IsActive {
+		return false, nil
+	}
+	if sched.LastRunAt != nil && !sched.LastRunAt.Before(fireAt) {
+		return false, nil
+	}
+	t := fireAt
+	sched.LastRunAt = &t
+	sched.UpdatedAt = time.Now().UTC()
+	return true, nil
+}
+
+func (s *MemoryStorage) RecordScheduleRun(ctx context.Context, namespace, id string, fireAt time.Time, execID, lastErr string, nextRun *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scheduleKey(namespace, id)
+	sched, ok := s.schedules[key]
+	if !ok {
+		return fmt.Errorf("schedule not found")
+	}
+	t := fireAt.UTC().Truncate(time.Second)
+	sched.LastRunAt = &t
+	sched.LastExecID = execID
+	sched.LastError = lastErr
+	if nextRun != nil {
+		n := nextRun.UTC()
+		sched.NextRunAt = &n
+	} else {
+		sched.NextRunAt = nil
+	}
+	sched.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func cloneSchedule(sched *models.Schedule) *models.Schedule {
+	copy := *sched
+	if sched.LastRunAt != nil {
+		t := *sched.LastRunAt
+		copy.LastRunAt = &t
+	}
+	if sched.NextRunAt != nil {
+		t := *sched.NextRunAt
+		copy.NextRunAt = &t
+	}
+	if sched.StartsAt != nil {
+		t := *sched.StartsAt
+		copy.StartsAt = &t
+	}
+	if sched.EndsAt != nil {
+		t := *sched.EndsAt
+		copy.EndsAt = &t
+	}
+	return &copy
 }

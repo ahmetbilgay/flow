@@ -159,3 +159,40 @@ Tasarımı tamamlar ve derlenmiş `*flow.Workflow` nesnesini döner.
 ```go
 wf := builder.Build()
 ```
+
+## CronManager (Kalıcı Scheduler)
+
+`engine.CronManager` schedule'ları kalıcı tutar; IANA timezone, multi-replica fire claim, catch-up ve zaman penceresi destekler.
+
+```go
+_ = engine.CronManager.Start(ctx)
+id, err := engine.CronManager.AddScheduleWithOpts(ctx, "tenant-a", "wf-id", "0 0 9 * * *", `{}`, flow.ScheduleOpts{
+    Name: "sabah", Timezone: "Europe/Istanbul", CatchUp: true,
+})
+expr := "0 30 9 * * *"
+_ = engine.CronManager.UpdateSchedule(ctx, "tenant-a", id, flow.ScheduleUpdateOpts{CronExpression: &expr})
+_ = engine.CronManager.PauseSchedule(ctx, "tenant-a", id)   // soft disable
+_ = engine.CronManager.ResumeSchedule(ctx, "tenant-a", id)
+_ = engine.CronManager.RemoveSchedule(ctx, "tenant-a", id)  // hard delete
+```
+
+### REST (`WithCron` ile açılır)
+
+```go
+api := flow.NewAPIManager(flow.NewWebhookManager(engine)).WithCron(engine.CronManager)
+```
+
+| Method | Path | Açıklama |
+|--------|------|----------|
+| GET | `/api/{ns}/schedules?active_only=true&limit=50&offset=0` | Liste |
+| POST | `/api/{ns}/schedules` | Oluştur |
+| GET | `/api/{ns}/schedules/{id}` | Get |
+| PUT | `/api/{ns}/schedules/{id}` | Kısmi update (sadece gönderilen alanlar) |
+| DELETE | `/api/{ns}/schedules/{id}` | Hard delete |
+| POST | `/api/{ns}/schedules/{id}/pause` | Soft disable |
+| POST | `/api/{ns}/schedules/{id}/resume` | Resume |
+| POST | `/api/{ns}/schedules/preview` | Sonraki N fire zamanı |
+
+**Semantik:** `Pause` = soft disable (`is_active=false`). `DELETE` = kalıcı silme. Süresi dolan `ends_at` auth olmadan auto-pause olur. Fire claim replica'lar arasında atomiktir.
+
+**Metrikler:** `flow_schedules_active`, `flow_schedule_fires_total{result}`.

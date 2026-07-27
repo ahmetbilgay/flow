@@ -63,8 +63,8 @@ Güvenlik uyumluluk standartlarını (örn. PCI-DSS, KVKK, GDPR) karşılamak i�
 
 ### Kullanım
 ```go
-// 1. 32-byte boyutunda anahtarla Crypto yardımcısını oluşturun
-crypto, err := flow.NewCrypto("your-32-byte-encryption-key-here")
+// 1. 32-byte boyutunda anahtarla Crypto yardımcısını oluşturun (64 hex karakter)
+crypto, err := flow.NewCrypto("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 if err != nil {
     log.Fatal("Geçersiz şifreleme anahtarı")
 }

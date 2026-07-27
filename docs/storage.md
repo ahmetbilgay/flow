@@ -65,8 +65,8 @@ To meet security compliance standards (e.g., PCI-DSS, GDPR), Dgmos Flow supports
 
 ### Usage
 ```go
-// 1. Instantiate the Crypto helper with a 32-byte key
-crypto, err := flow.NewCrypto("your-32-byte-encryption-key-here")
+// 1. Instantiate the Crypto helper with a 64-character hex key (32 bytes)
+crypto, err := flow.NewCrypto("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 if err != nil {
     log.Fatal("Invalid encryption key")
 }

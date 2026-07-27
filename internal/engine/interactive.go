@@ -17,6 +17,12 @@ type TaskFilter = storage.TaskFilter
 // Advance completes a WAITING (or PENDING interactive) step synchronously.
 // action is a free-form string (approve/reject/submit); payload is JSON.
 func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action, payload string) (string, []*models.ExecutionStep, error) {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "advance"); err != nil {
+		return "", nil, fmt.Errorf("access denied: %w", err)
+	}
+	if err := e.checkTaskAccess(ctx, namespace, nodeID, "advance"); err != nil {
+		return "", nil, fmt.Errorf("access denied: %w", err)
+	}
 	exec, err := e.storage.GetExecution(ctx, namespace, execID)
 	if err != nil {
 		return "", nil, err
@@ -141,11 +147,20 @@ func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action,
 
 // ListTasks returns WAITING human/interactive steps.
 func (e *Engine) ListTasks(ctx context.Context, namespace string, filter TaskFilter) ([]*models.ExecutionStep, error) {
+	if err := e.CheckAccess(ctx, fmt.Sprintf("task:%s:*", namespace), "view"); err != nil {
+		return nil, fmt.Errorf("access denied: %w", err)
+	}
 	return e.storage.ListWaitingSteps(ctx, namespace, filter)
 }
 
 // ClaimTask assigns a waiting human task to an actor.
 func (e *Engine) ClaimTask(ctx context.Context, namespace, execID, nodeID, actor string) error {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "claim"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
+	if err := e.checkTaskAccess(ctx, namespace, nodeID, "claim"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
 	if actor == "" {
 		return fmt.Errorf("actor is required")
 	}
@@ -180,6 +195,12 @@ func (e *Engine) ClaimTask(ctx context.Context, namespace, execID, nodeID, actor
 
 // ReleaseTask clears the claim on a waiting task.
 func (e *Engine) ReleaseTask(ctx context.Context, namespace, execID, nodeID, actor string) error {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "release"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
+	if err := e.checkTaskAccess(ctx, namespace, nodeID, "release"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
 	step, err := e.storage.GetExecutionStepByNode(ctx, namespace, execID, nodeID)
 	if err != nil {
 		return err
@@ -194,6 +215,12 @@ func (e *Engine) ReleaseTask(ctx context.Context, namespace, execID, nodeID, act
 
 // CompleteTask claims (if needed) and advances a human task.
 func (e *Engine) CompleteTask(ctx context.Context, namespace, execID, nodeID, actor, action, payload string) (string, []*models.ExecutionStep, error) {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "complete"); err != nil {
+		return "", nil, fmt.Errorf("access denied: %w", err)
+	}
+	if err := e.checkTaskAccess(ctx, namespace, nodeID, "complete"); err != nil {
+		return "", nil, fmt.Errorf("access denied: %w", err)
+	}
 	step, err := e.storage.GetExecutionStepByNode(ctx, namespace, execID, nodeID)
 	if err != nil {
 		return "", nil, err
@@ -276,6 +303,9 @@ func (e *Engine) GetVars(ctx context.Context, namespace, execID string) (map[str
 
 // RollbackTo records a journal entry and enqueues compensation for the target node's CompensateNodeID (or the node itself if it is a compensate node).
 func (e *Engine) RollbackTo(ctx context.Context, namespace, execID, nodeID, reason, actor string) error {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "rollback"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
 	exec, err := e.storage.GetExecution(ctx, namespace, execID)
 	if err != nil {
 		return err

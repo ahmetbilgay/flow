@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -131,7 +132,54 @@ func (s *SQLStorage) RunMigrations() error {
 			}
 		}
 	}
+	if err := s.upgradeSchedulesSchema(); err != nil {
+		return err
+	}
 	log.Println("✅ Database migrations completed successfully")
+	return nil
+}
+
+func (s *SQLStorage) upgradeSchedulesSchema() error {
+	tbl := s.t("schedules")
+	var alters []string
+	if _, ok := s.dialect.(PostgresDialect); ok {
+		alters = []string{
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS name VARCHAR(255) NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) NOT NULL DEFAULT 'UTC'`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS catch_up BOOLEAN NOT NULL DEFAULT FALSE`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS catch_up_max INT NOT NULL DEFAULT 0`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS catch_up_lookback_sec INT NOT NULL DEFAULT 0`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS starts_at TIMESTAMP WITH TIME ZONE NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS ends_at TIMESTAMP WITH TIME ZONE NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMP WITH TIME ZONE NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMP WITH TIME ZONE NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS last_exec_id VARCHAR(36) NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS last_error TEXT NULL`, tbl),
+		}
+	} else {
+		alters = []string{
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN name VARCHAR(255) NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN timezone VARCHAR(64) NOT NULL DEFAULT 'UTC'`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN catch_up TINYINT(1) NOT NULL DEFAULT 0`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN catch_up_max INT NOT NULL DEFAULT 0`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN catch_up_lookback_sec INT NOT NULL DEFAULT 0`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN starts_at TIMESTAMP NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN ends_at TIMESTAMP NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN last_run_at TIMESTAMP NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN next_run_at TIMESTAMP NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN last_exec_id VARCHAR(36) NULL`, tbl),
+			fmt.Sprintf(`ALTER TABLE %s ADD COLUMN last_error TEXT NULL`, tbl),
+		}
+	}
+	for _, q := range alters {
+		if _, err := s.db.Exec(q); err != nil {
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "duplicate") || strings.Contains(msg, "exists") {
+				continue
+			}
+			return fmt.Errorf("schedule schema upgrade: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -140,6 +188,7 @@ func (s *SQLStorage) buildSchema() string {
 	e := s.t("executions")
 	st := s.t("execution_steps")
 	j := s.t("compensation_journal")
+	sch := s.t("schedules")
 
 	if _, ok := s.dialect.(PostgresDialect); ok {
 		return fmt.Sprintf(`
@@ -195,6 +244,7 @@ CREATE TABLE IF NOT EXISTS %s (
 );
 CREATE INDEX IF NOT EXISTS idx_%s_claim ON %s(namespace, status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_%s_exec ON %s(execution_id);
+CREATE INDEX IF NOT EXISTS idx_%s_waiting ON %s(namespace, updated_at) WHERE status = 'WAITING';
 
 CREATE TABLE IF NOT EXISTS %s (
     id VARCHAR(36) PRIMARY KEY,
@@ -209,10 +259,35 @@ CREATE TABLE IF NOT EXISTS %s (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_%s_exec ON %s(execution_id);
+
+CREATE TABLE IF NOT EXISTS %s (
+    id VARCHAR(36) PRIMARY KEY,
+    namespace VARCHAR(255) NOT NULL,
+    workflow_id VARCHAR(36) NOT NULL,
+    name VARCHAR(255) NULL,
+    cron_expression VARCHAR(100) NOT NULL,
+    input JSONB DEFAULT NULL,
+    timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    catch_up BOOLEAN NOT NULL DEFAULT FALSE,
+    catch_up_max INT NOT NULL DEFAULT 0,
+    catch_up_lookback_sec INT NOT NULL DEFAULT 0,
+    starts_at TIMESTAMP WITH TIME ZONE NULL,
+    ends_at TIMESTAMP WITH TIME ZONE NULL,
+    last_run_at TIMESTAMP WITH TIME ZONE NULL,
+    next_run_at TIMESTAMP WITH TIME ZONE NULL,
+    last_exec_id VARCHAR(36) NULL,
+    last_error TEXT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_%s_ns_active ON %s(namespace, is_active);
+CREATE INDEX IF NOT EXISTS idx_%s_active ON %s(is_active);
 `, w, s.opts.TablePrefix+"wf", w,
 			e, s.opts.TablePrefix+"exec", e,
-			st, s.opts.TablePrefix+"steps", st, s.opts.TablePrefix+"steps_exec", st,
-			j, s.opts.TablePrefix+"jrnl", j)
+			st, s.opts.TablePrefix+"steps", st, s.opts.TablePrefix+"steps_exec", st, s.opts.TablePrefix+"steps_waiting", st,
+			j, s.opts.TablePrefix+"jrnl", j,
+			sch, s.opts.TablePrefix+"sched_ns", sch, s.opts.TablePrefix+"sched_act", sch)
 	}
 
 	return fmt.Sprintf(`
@@ -267,7 +342,8 @@ CREATE TABLE IF NOT EXISTS %s (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     finished_at TIMESTAMP NULL,
     INDEX idx_steps_claim (namespace, status, scheduled_at),
-    INDEX idx_steps_execution (execution_id)
+    INDEX idx_steps_execution (execution_id),
+    INDEX idx_steps_waiting (namespace, status, updated_at)
 );
 
 CREATE TABLE IF NOT EXISTS %s (
@@ -283,7 +359,31 @@ CREATE TABLE IF NOT EXISTS %s (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_jrnl_execution (execution_id)
 );
-`, w, e, st, j)
+
+CREATE TABLE IF NOT EXISTS %s (
+    id VARCHAR(36) PRIMARY KEY,
+    namespace VARCHAR(255) NOT NULL,
+    workflow_id VARCHAR(36) NOT NULL,
+    name VARCHAR(255) NULL,
+    cron_expression VARCHAR(100) NOT NULL,
+    input JSON DEFAULT NULL,
+    timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    catch_up TINYINT(1) NOT NULL DEFAULT 0,
+    catch_up_max INT NOT NULL DEFAULT 0,
+    catch_up_lookback_sec INT NOT NULL DEFAULT 0,
+    starts_at TIMESTAMP NULL,
+    ends_at TIMESTAMP NULL,
+    last_run_at TIMESTAMP NULL,
+    next_run_at TIMESTAMP NULL,
+    last_exec_id VARCHAR(36) NULL,
+    last_error TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_schedules_ns_active (namespace, is_active),
+    INDEX idx_schedules_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`, w, e, st, j, sch)
 }
 
 type taskMetaPayload struct {
@@ -685,4 +785,239 @@ func (s *SQLStorage) ListCompensationRecords(ctx context.Context, namespace, exe
 		return nil, err
 	}
 	return recs, nil
+}
+
+type scheduleRow struct {
+	ID                 string         `db:"id"`
+	Namespace          string         `db:"namespace"`
+	WorkflowID         string         `db:"workflow_id"`
+	Name               sql.NullString `db:"name"`
+	CronExpression     string         `db:"cron_expression"`
+	Input              sql.NullString `db:"input"`
+	Timezone           string         `db:"timezone"`
+	IsActive           bool           `db:"is_active"`
+	CatchUp            bool           `db:"catch_up"`
+	CatchUpMax         int            `db:"catch_up_max"`
+	CatchUpLookbackSec int            `db:"catch_up_lookback_sec"`
+	StartsAt           sql.NullTime   `db:"starts_at"`
+	EndsAt             sql.NullTime   `db:"ends_at"`
+	LastRunAt          sql.NullTime   `db:"last_run_at"`
+	NextRunAt          sql.NullTime   `db:"next_run_at"`
+	LastExecID         sql.NullString `db:"last_exec_id"`
+	LastError          sql.NullString `db:"last_error"`
+	CreatedAt          time.Time      `db:"created_at"`
+	UpdatedAt          time.Time      `db:"updated_at"`
+}
+
+func (s *SQLStorage) mapSchedule(row *scheduleRow) *models.Schedule {
+	out := &models.Schedule{
+		ID:                 row.ID,
+		Namespace:          row.Namespace,
+		WorkflowID:         row.WorkflowID,
+		Name:               row.Name.String,
+		CronExpression:     row.CronExpression,
+		Input:              row.Input.String,
+		Timezone:           row.Timezone,
+		IsActive:           row.IsActive,
+		CatchUp:            row.CatchUp,
+		CatchUpMax:         row.CatchUpMax,
+		CatchUpLookbackSec: row.CatchUpLookbackSec,
+		LastExecID:         row.LastExecID.String,
+		LastError:          row.LastError.String,
+		CreatedAt:          row.CreatedAt,
+		UpdatedAt:          row.UpdatedAt,
+	}
+	if out.Timezone == "" {
+		out.Timezone = "UTC"
+	}
+	if row.StartsAt.Valid {
+		t := row.StartsAt.Time
+		out.StartsAt = &t
+	}
+	if row.EndsAt.Valid {
+		t := row.EndsAt.Time
+		out.EndsAt = &t
+	}
+	if row.LastRunAt.Valid {
+		t := row.LastRunAt.Time
+		out.LastRunAt = &t
+	}
+	if row.NextRunAt.Valid {
+		t := row.NextRunAt.Time
+		out.NextRunAt = &t
+	}
+	return out
+}
+
+func scheduleSelectCols() string {
+	return `id, namespace, workflow_id, name, cron_expression, input, timezone, is_active, catch_up, catch_up_max, catch_up_lookback_sec, starts_at, ends_at, last_run_at, next_run_at, last_exec_id, last_error, created_at, updated_at`
+}
+
+func (s *SQLStorage) SaveSchedule(ctx context.Context, sched *models.Schedule) error {
+	if sched.CreatedAt.IsZero() {
+		sched.CreatedAt = time.Now().UTC()
+	}
+	sched.UpdatedAt = time.Now().UTC()
+	if sched.Timezone == "" {
+		sched.Timezone = "UTC"
+	}
+
+	var input interface{}
+	if sched.Input == "" {
+		input = nil
+	} else {
+		input = sched.Input
+	}
+
+	tbl := s.t("schedules")
+	cols := `(id, namespace, workflow_id, name, cron_expression, input, timezone, is_active, catch_up, catch_up_max, catch_up_lookback_sec, starts_at, ends_at, last_run_at, next_run_at, last_exec_id, last_error, created_at, updated_at)`
+	vals := `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var q string
+	if _, ok := s.dialect.(PostgresDialect); ok {
+		q = s.ph(fmt.Sprintf(`INSERT INTO %s %s %s
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				cron_expression = EXCLUDED.cron_expression,
+				input = EXCLUDED.input,
+				timezone = EXCLUDED.timezone,
+				is_active = EXCLUDED.is_active,
+				catch_up = EXCLUDED.catch_up,
+				catch_up_max = EXCLUDED.catch_up_max,
+				catch_up_lookback_sec = EXCLUDED.catch_up_lookback_sec,
+				starts_at = EXCLUDED.starts_at,
+				ends_at = EXCLUDED.ends_at,
+				next_run_at = EXCLUDED.next_run_at,
+				updated_at = EXCLUDED.updated_at,
+				workflow_id = EXCLUDED.workflow_id,
+				namespace = EXCLUDED.namespace`, tbl, cols, vals))
+	} else {
+		q = s.ph(fmt.Sprintf(`INSERT INTO %s %s %s
+			ON DUPLICATE KEY UPDATE
+				name = VALUES(name),
+				cron_expression = VALUES(cron_expression),
+				input = VALUES(input),
+				timezone = VALUES(timezone),
+				is_active = VALUES(is_active),
+				catch_up = VALUES(catch_up),
+				catch_up_max = VALUES(catch_up_max),
+				catch_up_lookback_sec = VALUES(catch_up_lookback_sec),
+				starts_at = VALUES(starts_at),
+				ends_at = VALUES(ends_at),
+				next_run_at = VALUES(next_run_at),
+				updated_at = VALUES(updated_at),
+				workflow_id = VALUES(workflow_id),
+				namespace = VALUES(namespace)`, tbl, cols, vals))
+	}
+
+	_, err := s.db.ExecContext(ctx, q,
+		sched.ID, sched.Namespace, sched.WorkflowID, nullStrPtr(sched.Name), sched.CronExpression,
+		input, sched.Timezone, sched.IsActive, sched.CatchUp, sched.CatchUpMax, sched.CatchUpLookbackSec,
+		sched.StartsAt, sched.EndsAt, sched.LastRunAt, sched.NextRunAt,
+		nullStrPtr(sched.LastExecID), nullStrPtr(sched.LastError), sched.CreatedAt, sched.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("sql_storage: failed to save schedule: %w", err)
+	}
+	return nil
+}
+
+func nullStrPtr(v string) interface{} {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+func (s *SQLStorage) DeleteSchedule(ctx context.Context, namespace, id string) error {
+	q := s.ph(fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND id = ?`, s.t("schedules")))
+	result, err := s.db.ExecContext(ctx, q, namespace, id)
+	if err != nil {
+		return fmt.Errorf("sql_storage: failed to delete schedule: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("sql_storage: schedule not found: namespace=%s, id=%s", namespace, id)
+	}
+	return nil
+}
+
+func (s *SQLStorage) GetActiveSchedules(ctx context.Context) ([]*models.Schedule, error) {
+	q := s.ph(fmt.Sprintf(`SELECT %s FROM %s WHERE is_active = ? AND (ends_at IS NULL OR ends_at > ?)`, scheduleSelectCols(), s.t("schedules")))
+	var rows []scheduleRow
+	if err := s.db.SelectContext(ctx, &rows, q, true, time.Now().UTC()); err != nil {
+		return nil, fmt.Errorf("sql_storage: failed to query active schedules: %w", err)
+	}
+	out := make([]*models.Schedule, 0, len(rows))
+	for i := range rows {
+		out = append(out, s.mapSchedule(&rows[i]))
+	}
+	return out, nil
+}
+
+func (s *SQLStorage) GetSchedule(ctx context.Context, namespace, id string) (*models.Schedule, error) {
+	q := s.ph(fmt.Sprintf(`SELECT %s FROM %s WHERE namespace = ? AND id = ?`, scheduleSelectCols(), s.t("schedules")))
+	var row scheduleRow
+	if err := s.db.GetContext(ctx, &row, q, namespace, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("sql_storage: schedule not found")
+		}
+		return nil, fmt.Errorf("sql_storage: failed to get schedule: %w", err)
+	}
+	return s.mapSchedule(&row), nil
+}
+
+func (s *SQLStorage) ListSchedules(ctx context.Context, namespace string, filter storage.ScheduleFilter) ([]*models.Schedule, error) {
+	q := fmt.Sprintf(`SELECT %s FROM %s WHERE namespace = ?`, scheduleSelectCols(), s.t("schedules"))
+	args := []interface{}{namespace}
+	if filter.ActiveOnly {
+		q += ` AND is_active = ?`
+		args = append(args, true)
+	}
+	q += ` ORDER BY created_at ASC`
+	if filter.Limit > 0 {
+		q += fmt.Sprintf(` LIMIT %d`, filter.Limit)
+		if filter.Offset > 0 {
+			q += fmt.Sprintf(` OFFSET %d`, filter.Offset)
+		}
+	} else if filter.Offset > 0 {
+		q += fmt.Sprintf(` LIMIT 18446744073709551615 OFFSET %d`, filter.Offset)
+	}
+	var rows []scheduleRow
+	if err := s.db.SelectContext(ctx, &rows, s.ph(q), args...); err != nil {
+		return nil, fmt.Errorf("sql_storage: failed to list schedules: %w", err)
+	}
+	out := make([]*models.Schedule, 0, len(rows))
+	for i := range rows {
+		out = append(out, s.mapSchedule(&rows[i]))
+	}
+	return out, nil
+}
+
+func (s *SQLStorage) TryClaimScheduleRun(ctx context.Context, namespace, id string, fireAt time.Time) (bool, error) {
+	fireAt = fireAt.UTC().Truncate(time.Second)
+	q := s.ph(fmt.Sprintf(`UPDATE %s SET last_run_at = ?, updated_at = ?
+		WHERE id = ? AND namespace = ? AND is_active = ?
+		AND (last_run_at IS NULL OR last_run_at < ?)`, s.t("schedules")))
+	res, err := s.db.ExecContext(ctx, q, fireAt, time.Now().UTC(), id, namespace, true, fireAt)
+	if err != nil {
+		return false, fmt.Errorf("sql_storage: claim schedule run failed: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (s *SQLStorage) RecordScheduleRun(ctx context.Context, namespace, id string, fireAt time.Time, execID, lastErr string, nextRun *time.Time) error {
+	fireAt = fireAt.UTC().Truncate(time.Second)
+	q := s.ph(fmt.Sprintf(`UPDATE %s SET last_run_at = ?, last_exec_id = ?, last_error = ?, next_run_at = ?, updated_at = ?
+		WHERE id = ? AND namespace = ?`, s.t("schedules")))
+	_, err := s.db.ExecContext(ctx, q, fireAt, nullStrPtr(execID), nullStrPtr(lastErr), nextRun, time.Now().UTC(), id, namespace)
+	if err != nil {
+		return fmt.Errorf("sql_storage: record schedule run failed: %w", err)
+	}
+	return nil
 }

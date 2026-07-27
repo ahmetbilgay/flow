@@ -48,26 +48,44 @@ engine.SetAuthProvider(&CustomAuth{})
 
 ## ⏱️ Scheduling (Cron Manager)
 
-Run workflows periodically using Cron expressions. The `CronManager` wraps the engine and schedules tasks automatically.
+Durable, multi-replica-safe cron triggers with IANA timezones, catch-up, schedule windows, and REST API.
 
 ```go
-import (
-	"log/slog"
-	"os"
-	"github.com/dgmos/flow"
-)
+ctx := context.Background()
+_ = engine.CronManager.Start(ctx)
+defer engine.CronManager.Stop()
 
-// 1. Create Cron Manager
-logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-cronMgr := flow.NewCronManager(engine, logger)
+id, err := engine.CronManager.AddScheduleWithOpts(ctx, "tenant-a", "db-backup-wf", "0 0 9 * * *", `{"type":"daily"}`, flow.ScheduleOpts{
+	Name:     "morning-backup",
+	Timezone: "Europe/Istanbul",
+	CatchUp:  true,
+})
 
-// 2. Add schedules: namespace, workflowID, cronExpression, input string
-_, err := cronMgr.AddSchedule("default", "db-backup-wf", "0 2 * * *", `{"type":"daily"}`)
+expr := "0 30 9 * * *"
+tz := "Europe/Istanbul"
+_ = engine.CronManager.UpdateSchedule(ctx, "tenant-a", id, flow.ScheduleUpdateOpts{
+	CronExpression: &expr,
+	Timezone:       &tz,
+})
+_ = engine.CronManager.PauseSchedule(ctx, "tenant-a", id)
+_ = engine.CronManager.ResumeSchedule(ctx, "tenant-a", id)
+list, _ := engine.CronManager.ListSchedulesFiltered(ctx, "tenant-a", flow.ScheduleListFilter{ActiveOnly: true})
+_ = list
+next, _ := engine.CronManager.PreviewNextRuns("0 0 9 * * *", "Europe/Istanbul", 5)
+_ = next
 
-// 3. Start cron scheduler loop
-cronMgr.Start()
-defer cronMgr.Stop()
+// REST (optional)
+api := flow.NewAPIManager(flow.NewWebhookManager(engine)).WithCron(engine.CronManager)
+http.Handle("/", api)
 ```
+
+Schedule REST endpoints:
+- `GET|POST /api/{namespace}/schedules` (`?active_only=true&limit=&offset=`)
+- `GET|PUT|DELETE /api/{namespace}/schedules/{id}` (PUT = partial update)
+- `POST /api/{namespace}/schedules/{id}/pause|resume`
+- `POST /api/{namespace}/schedules/preview`
+
+Semantics: Pause = soft disable; DELETE = hard remove. Expired `ends_at` auto-pauses without auth.
 
 ---
 

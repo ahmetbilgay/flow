@@ -27,7 +27,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          go test -v -race -coverprofile=coverage.out -covermode=atomic -timeout=30s
+          go test -v -race -coverprofile=coverage.out -covermode=atomic -timeout=120s
           go tool cover -func=coverage.out
 
       - name: Coverage Report
@@ -54,6 +54,65 @@ jobs:
           else
             echo "✅ Coverage ${COVERAGE_NUM}% meets threshold"
           fi
+
+  integration:
+    name: Integration (MySQL / Postgres / Redis)
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: dgmos_flow
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+          POSTGRES_DB: dgmos_flow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run integration tests
+        env:
+          FLOW_INTEGRATION_REQUIRED: "1"
+          FLOW_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/dgmos_flow?parseTime=true
+          FLOW_POSTGRES_DSN: postgres://postgres:root@127.0.0.1:5432/dgmos_flow?sslmode=disable
+          FLOW_REDIS_ADDR: 127.0.0.1:6379
+        run: go test -tags=integration ./... -count=1 -race -timeout=10m -v
 
   build:
     name: Build

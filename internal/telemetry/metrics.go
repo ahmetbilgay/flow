@@ -32,8 +32,18 @@ var (
 	}, []string{"worker_id"})
 
 	StepDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name: "flow_step_duration_seconds",
-		Help: "Duration of step execution",
+		Name:    "flow_step_duration_seconds",
+		Help:    "Duration of step execution",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"namespace", "node_type"})
+
+	SchedulesActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "flow_schedules_active",
+		Help: "Number of active cron schedules loaded in this process",
+	}, []string{"namespace"})
+
+	ScheduleFires = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "flow_schedule_fires_total",
+		Help: "Cron schedule fire attempts by result",
+	}, []string{"namespace", "workflow_id", "result"}) // result: started|skipped|failed|claimed_lost
 )
