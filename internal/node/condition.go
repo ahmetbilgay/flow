@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -37,46 +38,9 @@ func (n *ConditionNode) Execute(ctx context.Context, config map[string]interface
 	aStr := fmt.Sprintf("%v", inputValue)
 	bStr := fmt.Sprintf("%v", value)
 
-	result := false
-	switch operator {
-	case "==", "equal":
-		result = aStr == bStr
-	case "!=", "not_equal":
-		result = aStr != bStr
-	case ">":
-		var a, b float64
-		_, errA := fmt.Sscanf(aStr, "%f", &a)
-		_, errB := fmt.Sscanf(bStr, "%f", &b)
-		if errA == nil && errB == nil {
-			result = a > b
-		}
-	case "<":
-		var a, b float64
-		_, errA := fmt.Sscanf(aStr, "%f", &a)
-		_, errB := fmt.Sscanf(bStr, "%f", &b)
-		if errA == nil && errB == nil {
-			result = a < b
-		}
-	case ">=":
-		var a, b float64
-		_, errA := fmt.Sscanf(aStr, "%f", &a)
-		_, errB := fmt.Sscanf(bStr, "%f", &b)
-		if errA == nil && errB == nil {
-			result = a >= b
-		}
-	case "<=":
-		var a, b float64
-		_, errA := fmt.Sscanf(aStr, "%f", &a)
-		_, errB := fmt.Sscanf(bStr, "%f", &b)
-		if errA == nil && errB == nil {
-			result = a <= b
-		}
-	case "contains":
-		result = strings.Contains(aStr, bStr)
-	case "not_contains":
-		result = !strings.Contains(aStr, bStr)
-	default:
-		return "", fmt.Errorf("unsupported operator: %s", operator)
+	result, err := compare(operator, aStr, bStr)
+	if err != nil {
+		return "", err
 	}
 
 	branch := "false"
@@ -98,12 +62,52 @@ func buildCondOutput(inMap map[string]interface{}, branch string) string {
 	return string(b)
 }
 
+// compare evaluates operator on two values. When both sides are numbers,
+// equality and ordering are numeric (so 5 == "5.0"); ordering operators are
+// false when either side is not a number.
+func compare(operator, aStr, bStr string) (bool, error) {
+	a, errA := strconv.ParseFloat(strings.TrimSpace(aStr), 64)
+	b, errB := strconv.ParseFloat(strings.TrimSpace(bStr), 64)
+	numeric := errA == nil && errB == nil
+
+	switch operator {
+	case "==", "equal":
+		if numeric {
+			return a == b, nil
+		}
+		return aStr == bStr, nil
+	case "!=", "not_equal":
+		if numeric {
+			return a != b, nil
+		}
+		return aStr != bStr, nil
+	case ">":
+		return numeric && a > b, nil
+	case "<":
+		return numeric && a < b, nil
+	case ">=":
+		return numeric && a >= b, nil
+	case "<=":
+		return numeric && a <= b, nil
+	case "contains":
+		return strings.Contains(aStr, bStr), nil
+	case "not_contains":
+		return !strings.Contains(aStr, bStr), nil
+	default:
+		return false, fmt.Errorf("unsupported operator: %s", operator)
+	}
+}
+
 func (n *ConditionNode) Validate(config map[string]interface{}) error {
 	if _, ok := config["variable"].(string); !ok {
 		return fmt.Errorf("missing 'variable' in condition config")
 	}
-	if _, ok := config["operator"].(string); !ok {
+	op, ok := config["operator"].(string)
+	if !ok {
 		return fmt.Errorf("missing 'operator' in condition config")
+	}
+	if _, err := compare(op, "", ""); err != nil {
+		return err
 	}
 	if _, ok := config["value"]; !ok {
 		return fmt.Errorf("missing 'value' in condition config")

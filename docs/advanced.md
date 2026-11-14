@@ -124,7 +124,7 @@ http.Handle("/metrics", promhttp.Handler())
 *   **Workflows Metrics**:
     *   `flow_workflows_started_total`
     *   `flow_workflows_completed_total`
-    *   `flow_workflows_failed_total`
+    *   `flow_workflows_failed_total` (Labels: `namespace`, `workflow_id`, `failed_node`)
 *   **Step Metrics**:
     *   `flow_steps_processed_total` (Labels: `namespace`, `node_type`, `status`)
     *   `flow_step_duration_seconds` (Labels: `namespace`, `node_type`)

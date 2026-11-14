@@ -80,7 +80,11 @@ func ImportStepChain(id, name string, steps []LegacyStep) (*Workflow, error) {
 	}
 
 	// Validate DAG
-	if _, err := engine.NewGraph(wf); err != nil {
+	g, err := engine.NewGraph(wf)
+	if err != nil {
+		return nil, fmt.Errorf("ImportStepChain: invalid graph: %w", err)
+	}
+	if err := g.Validate(); err != nil {
 		return nil, fmt.Errorf("ImportStepChain: invalid graph: %w", err)
 	}
 	return wf, nil

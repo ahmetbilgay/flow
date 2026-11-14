@@ -78,7 +78,8 @@ func (s *MemoryStorage) CreateExecution(ctx context.Context, namespace string, e
 		exec.Variables = make(map[string]interface{})
 	}
 	key := fmt.Sprintf("%s:%s", namespace, exec.ID)
-	s.executions[key] = exec
+	execCopy := *exec
+	s.executions[key] = &execCopy
 	return nil
 }
 
@@ -105,7 +106,8 @@ func (s *MemoryStorage) UpdateExecution(ctx context.Context, namespace string, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := fmt.Sprintf("%s:%s", namespace, exec.ID)
-	s.executions[key] = exec
+	execCopy := *exec
+	s.executions[key] = &execCopy
 	return nil
 }
 
@@ -127,7 +129,11 @@ func (s *MemoryStorage) CreateExecutionStep(ctx context.Context, namespace strin
 	step.Namespace = namespace
 	step.UpdatedAt = time.Now()
 	key := fmt.Sprintf("%s:%s", namespace, step.ID)
-	s.executionSteps[key] = step
+	if _, exists := s.executionSteps[key]; exists {
+		return storage.ErrStepExists
+	}
+	stepCopy := *step
+	s.executionSteps[key] = &stepCopy
 	return nil
 }
 
@@ -136,8 +142,23 @@ func (s *MemoryStorage) UpdateExecutionStep(ctx context.Context, namespace strin
 	defer s.mu.Unlock()
 	key := fmt.Sprintf("%s:%s", namespace, step.ID)
 	step.UpdatedAt = time.Now()
-	s.executionSteps[key] = step
+	// Store a copy so callers can keep mutating their pointer without racing
+	// with readers that hold the storage lock.
+	stepCopy := *step
+	s.executionSteps[key] = &stepCopy
 	return nil
+}
+
+// HeartbeatStep extends the lease of a RUNNING step owned by workerID.
+func (s *MemoryStorage) HeartbeatStep(ctx context.Context, namespace, stepID, workerID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	step, ok := s.executionSteps[fmt.Sprintf("%s:%s", namespace, stepID)]
+	if !ok || step.Status != models.TaskRunning || step.WorkerID != workerID {
+		return false, nil
+	}
+	step.UpdatedAt = time.Now()
+	return true, nil
 }
 
 func (s *MemoryStorage) GetExecutionSteps(ctx context.Context, namespace string, executionID string) ([]*models.ExecutionStep, error) {
@@ -169,7 +190,8 @@ func (s *MemoryStorage) ClaimReadyStep(ctx context.Context, namespace string, wo
 				step.Status = models.TaskRunning
 				step.WorkerID = workerID
 				step.UpdatedAt = now
-				return step, nil
+				claimed := *step
+				return &claimed, nil
 			}
 		}
 	}

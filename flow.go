@@ -62,7 +62,26 @@ import (
 type Engine struct {
 	*engine.Engine
 	CronManager *CronManager
+	registry    *Registry
 }
+
+// WorkerOptions configures worker concurrency and polling.
+type WorkerOptions = engine.WorkerOptions
+
+// OutboundPolicy controls which network destinations the built-in http and
+// notify nodes may reach, plus response size and timeout limits.
+type OutboundPolicy = node.OutboundPolicy
+
+// Errors returned by http/notify nodes when the OutboundPolicy is violated.
+// They are permanent: the step fails without retries.
+var (
+	ErrDestinationBlocked = node.ErrDestinationBlocked
+	ErrResponseTooLarge   = node.ErrResponseTooLarge
+)
+
+// PermanentError marks executor errors that should not be retried. Return an
+// error implementing it from a custom node to skip the retry policy.
+type PermanentError = engine.PermanentError
 
 // Registry manages workflow function handlers
 type Registry struct {
@@ -174,7 +193,7 @@ func NewEngine(storage Storage, registry *Registry) *Engine {
 	registry.Register("setvariable", &node.SetVariableNode{})
 	registry.Register("humantask", &node.HumanTaskNode{})
 
-	eng := &Engine{Engine: engine.NewEngine(storage, registry.Registry)}
+	eng := &Engine{Engine: engine.NewEngine(storage, registry.Registry), registry: registry}
 	subWFNode.SetEngine(eng)
 	eng.CronManager = &CronManager{CronManager: trigger.NewCronManager(eng.Engine, storage, eng.GetLogger())}
 	eng.CronManager.CronManager.SetEventBus(eng.EventBus())
@@ -268,9 +287,28 @@ func (e *Engine) ReapTimeouts(ctx context.Context, namespace string) error {
 	return e.Engine.ReapTimeouts(ctx, namespace)
 }
 
-// StartWorker starts a worker that processes tasks
+// StartWorker starts a worker that processes tasks one at a time.
+// It blocks until ctx is cancelled; in-flight steps are released back to the
+// queue on shutdown.
 func (e *Engine) StartWorker(ctx context.Context, namespace, workerID string) {
 	e.Engine.StartWorker(ctx, namespace, workerID)
+}
+
+// StartWorkerWithOptions starts a worker with custom concurrency and polling.
+//
+//	go engine.StartWorkerWithOptions(ctx, "default", "worker-1", flow.WorkerOptions{Concurrency: 16})
+func (e *Engine) StartWorkerWithOptions(ctx context.Context, namespace, workerID string, opts WorkerOptions) {
+	e.Engine.StartWorkerWithOptions(ctx, namespace, workerID, opts)
+}
+
+// SetOutboundPolicy replaces the network policy of the built-in "http" and
+// "notify" nodes registered by NewEngine. By default they may only reach
+// public internet addresses (SSRF protection); use AllowedHosts or
+// AllowPrivateNetworks to reach internal services.
+func (e *Engine) SetOutboundPolicy(p OutboundPolicy) *Engine {
+	e.registry.Register(NodeTypeHTTP, node.NewHTTPNodeWithPolicy(p))
+	e.registry.Register(NodeTypeNotify, node.NewNotifyNodeWithPolicy(p))
+	return e
 }
 
 // SetHostHooks wires a synchronous host integration handler (e.g. WebSocket bridge).
@@ -411,6 +449,11 @@ func NewWorker(id string, eng *Engine, registry *Registry, interval time.Duratio
 // SetNamespace sets the worker's namespace
 func (w *Worker) SetNamespace(namespace string) {
 	w.Worker.SetNamespace(namespace)
+}
+
+// SetConcurrency sets how many steps the worker runs in parallel.
+func (w *Worker) SetConcurrency(n int) {
+	w.Worker.SetConcurrency(n)
 }
 
 // Start begins the worker's task processing loop
@@ -743,7 +786,7 @@ func NewAPIManager(webhookMgr *WebhookManager) *APIManager {
 // WithCron enables schedule management REST endpoints.
 func (a *APIManager) WithCron(c *CronManager) *APIManager {
 	if c != nil {
-		a.APIManager.SetCronManager(c.CronManager)
+		a.SetCronManager(c.CronManager)
 	}
 	return a
 }

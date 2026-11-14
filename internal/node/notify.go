@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -25,13 +26,21 @@ type NotifyNode struct {
 	client *http.Client
 }
 
+// NewNotifyNode returns a notify node with the secure default OutboundPolicy
+// (15s timeout).
 func NewNotifyNode() *NotifyNode {
-	return &NotifyNode{
-		client: &http.Client{Timeout: 15 * time.Second},
-	}
+	return NewNotifyNodeWithPolicy(OutboundPolicy{Timeout: 15 * time.Second})
 }
 
-func (n *NotifyNode) Execute(_ context.Context, config map[string]interface{}, input string) (string, error) {
+// NewNotifyNodeWithPolicy returns a notify node restricted by policy.
+func NewNotifyNodeWithPolicy(p OutboundPolicy) *NotifyNode {
+	if p.Timeout == 0 {
+		p.Timeout = 15 * time.Second
+	}
+	return &NotifyNode{client: newClient(p)}
+}
+
+func (n *NotifyNode) Execute(ctx context.Context, config map[string]interface{}, input string) (string, error) {
 	urlTmpl, _ := config["url"].(string)
 	method, _ := config["method"].(string)
 	if method == "" {
@@ -60,9 +69,12 @@ func (n *NotifyNode) Execute(_ context.Context, config map[string]interface{}, i
 		}
 	}
 
-	req, err := http.NewRequest(method, renderedURL, bytes.NewBufferString(requestBody))
+	req, err := http.NewRequestWithContext(ctx, method, renderedURL, bytes.NewBufferString(requestBody))
 	if err != nil {
 		return "", fmt.Errorf("notify: failed to build request: %w", err)
+	}
+	if err := checkScheme(req.URL); err != nil {
+		return "", fmt.Errorf("notify: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -78,6 +90,8 @@ func (n *NotifyNode) Execute(_ context.Context, config map[string]interface{}, i
 		return "", fmt.Errorf("notify: request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// Drain (bounded) so the connection can be reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("notify: webhook returned HTTP %d", resp.StatusCode)

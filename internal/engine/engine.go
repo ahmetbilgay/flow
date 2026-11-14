@@ -105,6 +105,28 @@ func (e *Engine) StartWorkflow(ctx context.Context, namespace, workflowID string
 		return "", fmt.Errorf("failed to get workflow: %w", err)
 	}
 
+	// Validate everything before persisting, so a bad definition does not
+	// leave an orphan RUNNING execution behind.
+	g, err := NewGraph(wf)
+	if err != nil {
+		return "", err
+	}
+	if err := g.Validate(); err != nil {
+		return "", err
+	}
+	for _, n := range wf.Nodes {
+		executor, err := e.registry.Get(n.Type)
+		if err != nil {
+			return "", fmt.Errorf("node %s: %w", n.ID, err)
+		}
+		if err := executor.Validate(n.Config); err != nil {
+			return "", fmt.Errorf("node %s configuration error: %w", n.ID, err)
+		}
+		if _, err := stepTimeout(&n); err != nil {
+			return "", err
+		}
+	}
+
 	execID := uuid.New().String()
 	exec := &models.Execution{
 		ID:         execID,
@@ -121,33 +143,13 @@ func (e *Engine) StartWorkflow(ctx context.Context, namespace, workflowID string
 		return "", fmt.Errorf("failed to create execution: %w", err)
 	}
 
-	// Build graph to find initial nodes
-	g, err := NewGraph(wf)
-	if err != nil {
-		return "", err
-	}
-
-	// Early Validation: Check all nodes in the graph
-	for _, n := range wf.Nodes {
-		executor, err := e.registry.Get(n.Type)
-		if err != nil {
-			return "", fmt.Errorf("node %s: %w", n.ID, err)
-		}
-		if err := executor.Validate(n.Config); err != nil {
-			return "", fmt.Errorf("node %s configuration error: %w", n.ID, err)
-		}
-	}
-
-	initialNodeIDs := g.GetInitialNodes()
-	for _, nodeID := range initialNodeIDs {
-		n := FindNode(wf, nodeID)
-		step := NewStepForNode(namespace, execID, nodeID, input, n)
-		step.ID = uuid.New().String()
-		waiting := step.Status == models.TaskWaiting
-		if err := e.storage.CreateExecutionStep(ctx, namespace, step); err != nil {
+	for _, nodeID := range g.GetInitialNodes() {
+		step := NewStepForNode(namespace, execID, nodeID, input, FindNode(wf, nodeID))
+		step.ID = forwardStepID(execID, nodeID)
+		if _, err := e.createStep(ctx, namespace, step); err != nil {
 			return "", err
 		}
-		if waiting {
+		if step.Status == models.TaskWaiting {
 			e.emit(ctx, Event{
 				Type: EventTypeStepWaitingHuman, Namespace: namespace, Execution: exec, Step: step, Workflow: wf,
 			})
@@ -192,66 +194,10 @@ func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, o
 		return err
 	}
 
-	nextNodes := g.GetNextNodesWithBranch(step.NodeID, output)
-
-	allEdges := g.Edges[step.NodeID]
-	for _, edge := range allEdges {
-		isTaken := false
-		for _, n := range nextNodes {
-			if n == edge.TargetID {
-				isTaken = true
-				break
-			}
-		}
-		if !isTaken {
-			e.skipNode(ctx, exec, g, edge.TargetID)
-		}
+	if err := e.advanceFrom(ctx, exec, wf, g, step.NodeID); err != nil {
+		return err
 	}
-
-	if len(nextNodes) == 0 {
-		return e.checkAndFinishExecution(ctx, exec)
-	}
-
-	for _, nextID := range nextNodes {
-		ready, err := e.isNodeReady(ctx, nextID, exec.Namespace, exec.ID, g)
-		if err != nil {
-			return err
-		}
-
-		if ready {
-			finalInput := e.mergeVarsIntoInput(ctx, exec.Namespace, exec.ID, output)
-			if g.InDegree[nextID] > 1 {
-				steps, _ := e.storage.GetExecutionSteps(ctx, exec.Namespace, exec.ID)
-				aggMap := make(map[string]interface{})
-				for _, pID := range g.Predecessors[nextID] {
-					for _, s := range steps {
-						if s.NodeID == pID {
-							var outData interface{}
-							_ = json.Unmarshal([]byte(s.Output), &outData)
-							aggMap[pID] = outData
-						}
-					}
-				}
-				aggJSON, _ := json.Marshal(aggMap)
-				finalInput = e.mergeVarsIntoInput(ctx, exec.Namespace, exec.ID, string(aggJSON))
-			}
-
-			n := FindNode(wf, nextID)
-			newStep := NewStepForNode(exec.Namespace, exec.ID, nextID, finalInput, n)
-			newStep.ID = uuid.New().String()
-			waiting := newStep.Status == models.TaskWaiting
-			if err := e.storage.CreateExecutionStep(ctx, exec.Namespace, newStep); err != nil {
-				return err
-			}
-			if waiting {
-				e.emit(ctx, Event{
-					Type: EventTypeStepWaitingHuman, Namespace: exec.Namespace, Execution: exec, Step: newStep, Workflow: wf,
-				})
-			}
-		}
-	}
-
-	return nil
+	return e.checkAndFinishExecution(ctx, exec)
 }
 
 func (e *Engine) CancelExecution(ctx context.Context, namespace string, execID string) error {
@@ -276,15 +222,30 @@ func (e *Engine) CancelExecution(ctx context.Context, namespace string, execID s
 }
 
 func (e *Engine) FailExecution(ctx context.Context, namespace string, execID string, message string) error {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "fail"); err != nil {
+		return fmt.Errorf("access denied: %w", err)
+	}
+	return e.failExecution(ctx, namespace, execID, message)
+}
+
+// failExecution marks an execution FAILED without auth checks (engine-internal).
+func (e *Engine) failExecution(ctx context.Context, namespace string, execID string, message string) error {
 	exec, err := e.storage.GetExecution(ctx, namespace, execID)
 	if err != nil {
 		return err
+	}
+	if exec.Status != models.TaskRunning {
+		return nil
 	}
 	exec.Status = models.TaskFailed
 	exec.ErrorMessage = message
 	now := time.Now()
 	exec.FinishedAt = &now
-	return e.storage.UpdateExecution(ctx, namespace, exec)
+	if err := e.storage.UpdateExecution(ctx, namespace, exec); err != nil {
+		return err
+	}
+	e.emit(ctx, Event{Type: EventTypeWorkflowFailed, Namespace: namespace, Execution: exec})
+	return nil
 }
 
 func (e *Engine) SignalExecution(ctx context.Context, namespace string, execID string, nodeID string, output string) error {
@@ -347,91 +308,6 @@ func (e *Engine) mergeSignalData(existingInput string, signalData string) string
 	// Return merged JSON
 	merged, _ := json.Marshal(inputMap)
 	return string(merged)
-}
-
-func (e *Engine) skipNode(ctx context.Context, exec *models.Execution, g *Graph, nodeID string) {
-	// 1. Check if already skipped/finished to avoid cycles or redundant work
-	steps, _ := e.storage.GetExecutionSteps(ctx, exec.Namespace, exec.ID)
-	for _, s := range steps {
-		if s.NodeID == nodeID && (s.Status == models.TaskCompleted || s.Status == models.TaskSkipped || s.Status == models.TaskFailed) {
-			return
-		}
-	}
-
-	// 2. Mark as SKIPPED
-	step := &models.ExecutionStep{
-		ID:          uuid.New().String(),
-		Namespace:   exec.Namespace,
-		ExecutionID: exec.ID,
-		NodeID:      nodeID,
-		Status:      models.TaskSkipped,
-		StartedAt:   time.Now(),
-	}
-	now := time.Now()
-	step.FinishedAt = &now
-	if err := e.storage.CreateExecutionStep(ctx, exec.Namespace, step); err != nil {
-		e.logger.Error("Failed to create skipped step", "node", nodeID, "execution", exec.ID, "error", err)
-		return
-	}
-	e.logger.Debug("Skipping node", "node", nodeID, "execution", exec.ID)
-
-	// 3. Propagate to children
-	// A child should be skipped if ALL its predecessors are now SKIPPED.
-	// If it has at least one COMPLETED predecessor, it might be ready to RUN instead.
-	for _, edge := range g.Edges[nodeID] {
-		childID := edge.TargetID
-
-		ready, _ := e.isNodeReady(ctx, childID, exec.Namespace, exec.ID, g)
-		if ready {
-			// Check if all predecessors are skipped
-			childSteps, _ := e.storage.GetExecutionSteps(ctx, exec.Namespace, exec.ID)
-			allSkipped := true
-			// Find all predecessors of childID
-			preds := []string{}
-			for src, edgs := range g.Edges {
-				for _, edg := range edgs {
-					if edg.TargetID == childID {
-						preds = append(preds, src)
-					}
-				}
-			}
-
-			for _, p := range preds {
-				found := false
-				for _, cs := range childSteps {
-					if cs.NodeID == p {
-						if cs.Status != models.TaskSkipped {
-							allSkipped = false
-						}
-						found = true
-						break
-					}
-				}
-				if !found || !allSkipped {
-					allSkipped = false
-					break
-				}
-			}
-
-			if allSkipped {
-				e.skipNode(ctx, exec, g, childID)
-			} else {
-				// At least one is COMPLETED! Start the node.
-				newStep := &models.ExecutionStep{
-					ID:          uuid.New().String(),
-					Namespace:   exec.Namespace,
-					ExecutionID: exec.ID,
-					NodeID:      childID,
-					Status:      models.TaskPending,
-					Input:       "", // Or merge inputs?
-					StartedAt:   time.Now(),
-				}
-				if err := e.storage.CreateExecutionStep(ctx, exec.Namespace, newStep); err != nil {
-					e.logger.Error("Failed to create step after skip propagation", "node", childID, "execution", exec.ID, "error", err)
-				}
-			}
-		}
-	}
 }
 
 // ReapTimeouts checks for WAITING steps that have passed their timeout period.
@@ -525,6 +401,14 @@ func (e *Engine) RegisterWorkflow(ctx context.Context, namespace string, wf *mod
 		}
 	}
 
+	g, err := NewGraph(wf)
+	if err != nil {
+		return fmt.Errorf("invalid workflow %s: %w", wf.ID, err)
+	}
+	if err := g.Validate(); err != nil {
+		return fmt.Errorf("invalid workflow %s: %w", wf.ID, err)
+	}
+
 	wf.Namespace = namespace
 	wf.Status = models.WorkflowActive
 	wf.CreatedAt = time.Now()
@@ -537,93 +421,96 @@ func (e *Engine) Execute(ctx context.Context, namespace, workflowID string, inpu
 	return e.StartWorkflow(ctx, namespace, workflowID, string(input))
 }
 
-// StartWorker starts a worker loop that processes tasks
+// StartWorker starts a worker loop that processes tasks (one at a time).
+// It blocks until ctx is cancelled and in-flight work has been released.
 func (e *Engine) StartWorker(ctx context.Context, namespace, workerID string) {
-	worker := NewWorker(workerID, e, e.registry, 100*time.Millisecond)
+	e.StartWorkerWithOptions(ctx, namespace, workerID, WorkerOptions{})
+}
+
+// StartWorkerWithOptions starts a worker with custom concurrency/polling.
+func (e *Engine) StartWorkerWithOptions(ctx context.Context, namespace, workerID string, opts WorkerOptions) {
+	worker := NewWorker(workerID, e, e.registry, opts.PollInterval)
 	worker.SetNamespace(namespace)
+	worker.SetConcurrency(opts.Concurrency)
 	worker.Start(ctx)
 }
 
 func (e *Engine) GetExecutionSteps(ctx context.Context, namespace string, execID string) ([]*models.ExecutionStep, error) {
+	if err := e.checkExecutionAccess(ctx, namespace, execID, "view"); err != nil {
+		return nil, fmt.Errorf("access denied: %w", err)
+	}
 	return e.storage.GetExecutionSteps(ctx, namespace, execID)
 }
 
-func (e *Engine) isNodeReady(ctx context.Context, nodeID string, namespace string, execID string, g *Graph) (bool, error) {
-	predecessors := []string{}
-	for source, edges := range g.Edges {
-		for _, e := range edges {
-			if e.TargetID == nodeID {
-				predecessors = append(predecessors, source)
-			}
-		}
-	}
-
-	if len(predecessors) == 0 {
-		return true, nil
-	}
-
-	steps, err := e.storage.GetExecutionSteps(ctx, namespace, execID)
-	if err != nil {
-		return false, err
-	}
-
-	completedNodes := make(map[string]bool)
-	for _, s := range steps {
-		if s.Status == models.TaskCompleted || s.Status == models.TaskSkipped {
-			completedNodes[s.NodeID] = true
-		}
-	}
-
-	for _, p := range predecessors {
-		if !completedNodes[p] {
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
+// checkAndFinishExecution finalises a RUNNING execution once every step has
+// settled. It re-reads the execution so a concurrent cancel (or an earlier
+// finish) is never overwritten, and so durable variables are not clobbered.
 func (e *Engine) checkAndFinishExecution(ctx context.Context, exec *models.Execution) error {
+	current, err := e.storage.GetExecution(ctx, exec.Namespace, exec.ID)
+	if err != nil {
+		return err
+	}
+	if current.Status != models.TaskRunning {
+		return nil
+	}
+
 	steps, err := e.storage.GetExecutionSteps(ctx, exec.Namespace, exec.ID)
 	if err != nil {
 		return err
 	}
 
-	allFinished := true
-	hasFailure := false
-	var finalOutput string
-	var firstError string
-
+	var lastCompleted, firstFailed *models.ExecutionStep
 	for _, s := range steps {
-		if s.Status == models.TaskFailed {
-			hasFailure = true
-			firstError = s.Error
+		switch s.Status {
+		case models.TaskCompleted:
+			if lastCompleted == nil || finishedAfter(s, lastCompleted) {
+				lastCompleted = s
+			}
+		case models.TaskFailed:
+			if firstFailed == nil || finishedAfter(firstFailed, s) {
+				firstFailed = s
+			}
+		case models.TaskSkipped:
+		default:
+			return nil // still pending/running/waiting
 		}
-		if s.Status != models.TaskCompleted && s.Status != models.TaskFailed && s.Status != models.TaskSkipped {
-			allFinished = false
-			break
-		}
-		finalOutput = s.Output
 	}
 
-	if allFinished {
-		if hasFailure {
-			exec.Status = models.TaskFailed
-			exec.ErrorMessage = firstError
-			e.logger.Info("Execution failed", "execution", exec.ID, "error", firstError)
-			telemetry.WorkflowsFailed.WithLabelValues(exec.Namespace, exec.WorkflowID, firstError).Inc()
-			e.emit(ctx, Event{Type: EventTypeWorkflowFailed, Namespace: exec.Namespace, Execution: exec})
-		} else {
-			exec.Status = models.TaskCompleted
-			exec.Output = finalOutput
-			e.logger.Info("Execution completed", "execution", exec.ID)
-			telemetry.WorkflowsCompleted.WithLabelValues(exec.Namespace, exec.WorkflowID).Inc()
-			e.emit(ctx, Event{Type: EventTypeWorkflowCompleted, Namespace: exec.Namespace, Execution: exec})
+	now := time.Now()
+	current.FinishedAt = &now
+	if firstFailed != nil {
+		current.Status = models.TaskFailed
+		current.ErrorMessage = firstFailed.Error
+		e.logger.Info("Execution failed", "execution", current.ID, "error", firstFailed.Error)
+		telemetry.WorkflowsFailed.WithLabelValues(current.Namespace, current.WorkflowID, firstFailed.NodeID).Inc()
+	} else {
+		current.Status = models.TaskCompleted
+		if lastCompleted != nil {
+			current.Output = lastCompleted.Output
 		}
-		now := time.Now()
-		exec.FinishedAt = &now
-		return e.storage.UpdateExecution(ctx, exec.Namespace, exec)
+		e.logger.Info("Execution completed", "execution", current.ID)
+		telemetry.WorkflowsCompleted.WithLabelValues(current.Namespace, current.WorkflowID).Inc()
 	}
-
+	if err := e.storage.UpdateExecution(ctx, current.Namespace, current); err != nil {
+		return err
+	}
+	*exec = *current
+	evType := EventTypeWorkflowCompleted
+	if current.Status == models.TaskFailed {
+		evType = EventTypeWorkflowFailed
+	}
+	e.emit(ctx, Event{Type: evType, Namespace: current.Namespace, Execution: current})
 	return nil
+}
+
+// finishedAfter reports whether a finished later than b.
+func finishedAfter(a, b *models.ExecutionStep) bool {
+	at, bt := a.StartedAt, b.StartedAt
+	if a.FinishedAt != nil {
+		at = *a.FinishedAt
+	}
+	if b.FinishedAt != nil {
+		bt = *b.FinishedAt
+	}
+	return at.After(bt)
 }

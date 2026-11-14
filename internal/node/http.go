@@ -3,22 +3,23 @@ package node
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type HTTPNode struct {
-	client *http.Client
+	client   *http.Client
+	maxBytes int64
 }
 
+// NewHTTPNode returns an HTTP node with the secure default OutboundPolicy.
 func NewHTTPNode() *HTTPNode {
-	return &HTTPNode{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-	}
+	return NewHTTPNodeWithPolicy(OutboundPolicy{})
+}
+
+// NewHTTPNodeWithPolicy returns an HTTP node restricted by policy.
+func NewHTTPNodeWithPolicy(p OutboundPolicy) *HTTPNode {
+	return &HTTPNode{client: newClient(p), maxBytes: p.maxBytes()}
 }
 
 func (h *HTTPNode) Execute(ctx context.Context, config map[string]interface{}, input string) (string, error) {
@@ -30,6 +31,9 @@ func (h *HTTPNode) Execute(ctx context.Context, config map[string]interface{}, i
 
 	req, err := http.NewRequestWithContext(ctx, method, url, strings.NewReader(input))
 	if err != nil {
+		return "", err
+	}
+	if err := checkScheme(req.URL); err != nil {
 		return "", err
 	}
 
@@ -46,7 +50,7 @@ func (h *HTTPNode) Execute(ctx context.Context, config map[string]interface{}, i
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body, h.maxBytes)
 	if err != nil {
 		return "", err
 	}

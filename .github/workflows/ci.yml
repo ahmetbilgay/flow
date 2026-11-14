@@ -25,6 +25,9 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Run all package tests
+        run: go test -race -count=1 -timeout=300s ./...
+
       - name: Run tests with coverage
         run: |
           go test -v -race -coverprofile=coverage.out -covermode=atomic -timeout=120s
@@ -154,10 +157,10 @@ jobs:
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
-          args: --timeout=5m
+          version: v2.11.4
+          args: --timeout=5m --build-tags=integration
 
   benchmark:
     name: Benchmark

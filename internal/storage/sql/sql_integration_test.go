@@ -154,3 +154,43 @@ func TestMySQLStorageIntegration(t *testing.T) {
 func TestPostgresStorageIntegration(t *testing.T) {
 	runStorageContract(t, openPostgres(t))
 }
+
+func runClaimIsolationAndLease(t *testing.T, store *SQLStorage) {
+	t.Helper()
+	ctx := context.Background()
+	nsA := integrationtest.UniqueNamespace()
+	nsB := integrationtest.UniqueNamespace()
+	now := time.Now().UTC()
+
+	if err := store.CreateExecutionStep(ctx, nsB, &models.ExecutionStep{
+		ID: integrationtest.UniqueID(), ExecutionID: "exec-b", NodeID: "n1", Status: models.TaskPending, StartedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateExecutionStep: %v", err)
+	}
+	// A worker pinned to namespace A must not see namespace B's pending work.
+	if s, err := store.ClaimReadyStep(ctx, nsA, "worker-a"); err != nil || s != nil {
+		t.Fatalf("namespace leak: claimed %+v err=%v", s, err)
+	}
+	claimed, err := store.ClaimReadyStep(ctx, nsB, "worker-b")
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimReadyStep nsB: %v %+v", err, claimed)
+	}
+
+	// Duplicate IDs are reported as ErrStepExists.
+	dupErr := store.CreateExecutionStep(ctx, nsB, &models.ExecutionStep{
+		ID: claimed.ID, ExecutionID: "exec-b", NodeID: "n1", Status: models.TaskPending, StartedAt: now,
+	})
+	if dupErr != storage.ErrStepExists {
+		t.Fatalf("duplicate create: got %v, want ErrStepExists", dupErr)
+	}
+
+	if ok, err := store.HeartbeatStep(ctx, nsB, claimed.ID, "worker-b"); err != nil || !ok {
+		t.Fatalf("owner heartbeat: ok=%v err=%v", ok, err)
+	}
+	if ok, err := store.HeartbeatStep(ctx, nsB, claimed.ID, "someone-else"); err != nil || ok {
+		t.Fatalf("non-owner heartbeat: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestMySQLClaimIsolation(t *testing.T)    { runClaimIsolationAndLease(t, openMySQL(t)) }
+func TestPostgresClaimIsolation(t *testing.T) { runClaimIsolationAndLease(t, openPostgres(t)) }

@@ -138,8 +138,19 @@ wf := flow.NewWorkflow(id, name).
 ```go
 worker := flow.NewWorker(workerID, engine, registry, interval)
 worker.SetNamespace(namespace)
-worker.Start(ctx)
+worker.SetConcurrency(16) // run up to 16 steps in parallel (default 1)
+worker.Start(ctx)         // blocks until ctx is cancelled
+
+// or
+go engine.StartWorkerWithOptions(ctx, "default", "worker-1", flow.WorkerOptions{
+    Concurrency:  16,
+    PollInterval: 100 * time.Millisecond, // idle polling; busy workers claim immediately
+})
 ```
+
+On shutdown (cancel `ctx`) the worker stops claiming, cancels in-flight steps,
+puts them back to `PENDING` without consuming a retry attempt, and returns once
+they are released.
 
 ## Node Types
 
@@ -174,6 +185,49 @@ node := flow.Node{
     },
 }
 ```
+
+`MaxAttempts` is the number of retries after the first failure. The delay
+before retry *n* is `InitialInterval * BackoffCoefficient^(n-1)`, capped at
+`MaximumInterval`.
+
+Errors that can never succeed are not retried: return an error implementing
+`flow.PermanentError` (`Permanent() bool`) from a custom node to fail the step
+immediately. Outbound policy violations and invalid node config are permanent.
+
+### Step Timeout
+
+Any node can set `execution_timeout` (Go duration). The executor's context is
+cancelled when it expires and the attempt fails (and is retried per policy):
+
+```go
+builder.AddNode("call", flow.NodeTypeHTTP).
+    WithConfig("url", "https://api.example.com/slow").
+    WithConfig("execution_timeout", "45s")
+```
+
+### Outbound Network Policy (SSRF protection)
+
+The `http` and `notify` nodes may only reach **public internet addresses** by
+default. Loopback, private (RFC 1918 / ULA), link-local (including the
+`169.254.169.254` cloud metadata endpoint) and CGNAT ranges are blocked; the
+check runs on the resolved IP for every connection, so redirects and DNS
+rebinding cannot bypass it. Only `http`/`https` URLs are allowed, responses
+are capped at 10 MiB, and environment proxy settings are ignored.
+
+To reach internal services, allow them explicitly:
+
+```go
+engine.SetOutboundPolicy(flow.OutboundPolicy{
+    AllowedHosts:     []string{"billing.internal", "10.20.0.0/16"},
+    MaxResponseBytes: 50 << 20, // 50 MiB; -1 = unlimited
+    Timeout:          time.Minute,
+})
+
+// or, only when every workflow definition is fully trusted:
+engine.SetOutboundPolicy(flow.OutboundPolicy{AllowPrivateNetworks: true})
+```
+
+Blocked requests fail with `flow.ErrDestinationBlocked` (`errors.Is`).
 
 ### Compensation (Saga Pattern)
 
@@ -480,7 +534,8 @@ Indexes are optimized for:
 
 - Workers claim tasks using database-level locking (`SKIP LOCKED`)
 - Multiple workers can run concurrently across different processes/hosts
-- Tasks are automatically reassigned if a worker crashes (zombie detection)
+- Running tasks hold a lease that the worker renews every 30s; a task is reassigned only after its lease has been silent for 5 minutes (worker crash), so long-running tasks are not executed twice
+- Join nodes (multiple incoming edges) are scheduled exactly once, even when parallel branches finish at the same time
 - No message broker required - coordination through storage backend
 
 ## Error Handling

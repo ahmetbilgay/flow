@@ -19,7 +19,7 @@ var (
 	WorkflowsFailed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "flow_workflows_failed_total",
 		Help: "Total number of workflows failed",
-	}, []string{"namespace", "workflow_id", "error"})
+	}, []string{"namespace", "workflow_id", "failed_node"})
 
 	StepsProcessed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "flow_steps_processed_total",

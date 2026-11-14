@@ -93,3 +93,48 @@ func runRedisContract(t *testing.T, store *RedisStorage) {
 func TestRedisStorageIntegration(t *testing.T) {
 	runRedisContract(t, openRedis(t))
 }
+
+func TestRedisRetryRequeueAndLease(t *testing.T) {
+	store := openRedis(t)
+	ctx := context.Background()
+	ns := integrationtest.UniqueNamespace()
+	id := integrationtest.UniqueID()
+	step := &models.ExecutionStep{ID: id, ExecutionID: "e1", NodeID: "n1", Status: models.TaskPending}
+	if err := store.CreateExecutionStep(ctx, ns, step); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateExecutionStep(ctx, ns, step); err != storage.ErrStepExists {
+		t.Fatalf("duplicate create: got %v, want ErrStepExists", err)
+	}
+
+	claimed, err := store.ClaimReadyStep(ctx, ns, "w1")
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %+v", err, claimed)
+	}
+	if ok, err := store.HeartbeatStep(ctx, ns, id, "w1"); err != nil || !ok {
+		t.Fatalf("heartbeat: ok=%v err=%v", ok, err)
+	}
+	if s, _ := store.ClaimReadyStep(ctx, ns, "w2"); s != nil {
+		t.Fatal("running step with fresh lease must not be claimable")
+	}
+
+	// A retry puts the step back to PENDING; it must be claimable again.
+	claimed.Status = models.TaskPending
+	claimed.AttemptNumber = 1
+	if err := store.UpdateExecutionStep(ctx, ns, claimed); err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.ClaimReadyStep(ctx, ns, "w2")
+	if err != nil || again == nil || again.ID != id {
+		t.Fatalf("retried step not re-queued: %v %+v", err, again)
+	}
+
+	// Finishing removes the lease.
+	again.Status = models.TaskCompleted
+	if err := store.UpdateExecutionStep(ctx, ns, again); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.client.ZCard(ctx, runningSet(ns)).Result(); n != 0 {
+		t.Fatalf("running set should be empty, has %d", n)
+	}
+}

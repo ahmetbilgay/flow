@@ -2,29 +2,58 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/dgmos/flow/internal/models"
+	"github.com/dgmos/flow/internal/storage"
 )
 
+// PermanentError can be implemented by executor errors that must not be
+// retried (e.g. a blocked destination or invalid input). The step fails
+// immediately instead of going through the retry policy.
+type PermanentError interface {
+	error
+	Permanent() bool
+}
+
+// IsPermanent reports whether err (or anything it wraps) is permanent.
+func IsPermanent(err error) bool {
+	var p PermanentError
+	return errors.As(err, &p) && p.Permanent()
+}
+
+// WorkerOptions tunes a worker.
+type WorkerOptions struct {
+	// Concurrency is the number of steps processed in parallel (default 1).
+	Concurrency int
+	// PollInterval is how long an idle worker waits before polling storage
+	// again (default 100ms). A busy worker claims the next step immediately.
+	PollInterval time.Duration
+}
+
 type Worker struct {
-	id        string
-	namespace string
-	engine    *Engine
-	registry  *Registry
-	interval  time.Duration
-	mu        sync.Mutex
-	running   bool
+	id          string
+	namespace   string
+	engine      *Engine
+	registry    *Registry
+	interval    time.Duration
+	concurrency int
 }
 
 func NewWorker(id string, engine *Engine, registry *Registry, interval time.Duration) *Worker {
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
 	return &Worker{
-		id:       id,
-		engine:   engine,
-		registry: registry,
-		interval: interval,
+		id:          id,
+		engine:      engine,
+		registry:    registry,
+		interval:    interval,
+		concurrency: 1,
 	}
 }
 
@@ -33,16 +62,29 @@ func (w *Worker) SetNamespace(namespace string) {
 	w.namespace = namespace
 }
 
+// SetConcurrency sets how many steps the worker runs in parallel (min 1).
+func (w *Worker) SetConcurrency(n int) {
+	if n < 1 {
+		n = 1
+	}
+	w.concurrency = n
+}
+
+// Start runs the worker until ctx is cancelled. On shutdown it stops claiming
+// new steps, cancels in-flight executors, releases their steps back to the
+// queue (without consuming a retry attempt) and returns once they are done.
 func (w *Worker) Start(ctx context.Context) {
-	w.engine.logger.Info("Worker started", "id", w.id, "namespace", w.namespace)
+	w.engine.logger.Info("Worker started", "id", w.id, "namespace", w.namespace, "concurrency", w.concurrency)
 	GetTelemetry().WorkerStarted(w.id)
 	defer GetTelemetry().WorkerStopped(w.id)
 
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
+	var wg sync.WaitGroup
+	defer wg.Wait()
 
 	// Automatically fail signal-waiting tasks that exceed timeout in the background
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		reapTicker := time.NewTicker(30 * time.Second)
 		defer reapTicker.Stop()
 		for {
@@ -50,62 +92,87 @@ func (w *Worker) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-reapTicker.C:
-				_ = w.engine.ReapTimeouts(ctx, w.namespace)
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			w.engine.logger.Info("Worker received shutdown signal", "id", w.id)
-			return
-		case <-ticker.C:
-			w.processOne(ctx)
-		}
-	}
-}
-
-func (w *Worker) processOne(ctx context.Context) {
-	w.mu.Lock()
-	w.running = true
-	defer func() {
-		w.mu.Unlock()
-		w.running = false
-	}()
-
-	var step *models.ExecutionStep
-	defer func() {
-		if r := recover(); r != nil {
-			w.engine.logger.Error("Worker panic recovered", "worker", w.id, "panic", r)
-			if step != nil {
-				step.Status = models.TaskFailed
-				step.Error = fmt.Sprintf("Panic: %v", r)
-				now := time.Now()
-				step.FinishedAt = &now
-				_ = w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step)
-
-				exec, err := w.engine.storage.GetExecution(ctx, step.Namespace, step.ExecutionID)
-				if err == nil {
-					_ = w.engine.FailExecution(ctx, step.Namespace, exec.ID, step.Error)
+				if err := w.engine.ReapTimeouts(ctx, w.namespace); err != nil && ctx.Err() == nil {
+					w.engine.logger.Error("Timeout reaper failed", "worker", w.id, "error", err)
 				}
 			}
 		}
 	}()
 
-	var err error
-	step, err = w.engine.storage.ClaimReadyStep(ctx, w.namespace, w.id)
+	slots := make(chan struct{}, w.concurrency)
+	idle := time.NewTimer(0)
+	defer idle.Stop()
+	for {
+		// Wait for a free slot.
+		select {
+		case <-ctx.Done():
+			w.engine.logger.Info("Worker received shutdown signal", "id", w.id)
+			return
+		case slots <- struct{}{}:
+		}
+
+		step, err := w.engine.storage.ClaimReadyStep(ctx, w.namespace, w.id)
+		if err != nil && ctx.Err() == nil {
+			w.engine.logger.Error("Failed to claim step", "id", w.id, "error", err)
+		}
+		if step == nil {
+			<-slots
+			// Nothing to do: back off before polling again.
+			idle.Reset(w.interval)
+			select {
+			case <-ctx.Done():
+				w.engine.logger.Info("Worker received shutdown signal", "id", w.id)
+				return
+			case <-idle.C:
+			}
+			continue
+		}
+
+		wg.Add(1)
+		go func(step *models.ExecutionStep) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			w.process(ctx, step)
+		}(step)
+	}
+}
+
+// processOne claims and processes at most one step synchronously.
+func (w *Worker) processOne(ctx context.Context) {
+	step, err := w.engine.storage.ClaimReadyStep(ctx, w.namespace, w.id)
 	if err != nil {
 		w.engine.logger.Error("Failed to claim step", "id", w.id, "error", err)
 		return
 	}
-
-	if step == nil {
-		return
+	if step != nil {
+		w.process(ctx, step)
 	}
+}
+
+// process executes a claimed step and records the outcome. Bookkeeping uses a
+// context detached from shutdown so results are persisted even while the
+// worker is stopping.
+func (w *Worker) process(runCtx context.Context, step *models.ExecutionStep) {
+	ctx := context.WithoutCancel(runCtx)
+
+	defer func() {
+		if r := recover(); r != nil {
+			w.engine.logger.Error("Worker panic recovered", "worker", w.id, "panic", r)
+			step.Status = models.TaskFailed
+			step.Error = fmt.Sprintf("Panic: %v", r)
+			now := time.Now()
+			step.FinishedAt = &now
+			_ = w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step)
+			_ = w.engine.failExecution(ctx, step.Namespace, step.ExecutionID, step.Error)
+		}
+	}()
 
 	exec, err := w.engine.storage.GetExecution(ctx, step.Namespace, step.ExecutionID)
-	if err == nil && exec.Status == models.TaskCancelled {
+	if err != nil {
+		w.failStepHard(ctx, step, fmt.Errorf("load execution: %w", err))
+		return
+	}
+	if exec.Status == models.TaskCancelled {
 		w.engine.logger.Warn("Step skipped due to cancellation", "worker", w.id, "step", step.ID, "execution", exec.ID)
 		step.Status = models.TaskCancelled
 		now := time.Now()
@@ -115,22 +182,35 @@ func (w *Worker) processOne(ctx context.Context) {
 		}
 		return
 	}
+	wf, err := w.engine.storage.GetWorkflow(ctx, step.Namespace, exec.WorkflowID)
+	if err != nil {
+		w.failStepHard(ctx, step, fmt.Errorf("load workflow: %w", err))
+		return
+	}
 
-	// We'll increment processed after finding node type below
 	w.engine.logger.Info("Processing step", "worker", w.id, "step", step.ID, "node", step.NodeID, "namespace", step.Namespace)
 
+	stopHeartbeat := w.startHeartbeat(ctx, step)
 	start := time.Now()
-	output, err := w.executeStep(ctx, step)
+	output, err := w.executeStep(runCtx, step, exec, wf)
 	duration := time.Since(start)
+	stopHeartbeat()
 
-	// Determine node type for metrics
 	nodeType := "unknown"
-	wf, _ := w.engine.storage.GetWorkflow(ctx, step.Namespace, exec.WorkflowID)
-	for _, n := range wf.Nodes {
-		if n.ID == step.NodeID {
-			nodeType = n.Type
-			break
+	if n := FindNode(wf, step.NodeID); n != nil {
+		nodeType = n.Type
+	}
+
+	if err != nil && runCtx.Err() != nil {
+		// Worker is shutting down: hand the step back without using a retry.
+		w.engine.logger.Info("Releasing step on shutdown", "worker", w.id, "step", step.ID)
+		step.Status = models.TaskPending
+		step.WorkerID = ""
+		step.ScheduledAt = nil
+		if uerr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); uerr != nil {
+			w.engine.logger.Error("Failed to release step", "worker", w.id, "step", step.ID, "error", uerr)
 		}
+		return
 	}
 
 	if err != nil {
@@ -139,12 +219,7 @@ func (w *Worker) processOne(ctx context.Context) {
 			waitReason := err.Error()
 			w.engine.logger.Info("Step entering WAITING state", "worker", w.id, "step", step.ID, "node", step.NodeID, "reason", waitReason)
 			step.Status = models.TaskWaiting
-			for _, n := range wf.Nodes {
-				if n.ID == step.NodeID {
-					ApplyHumanTaskConfig(step, &n)
-					break
-				}
-			}
+			ApplyHumanTaskConfig(step, FindNode(wf, step.NodeID))
 			if updErr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); updErr != nil {
 				w.engine.logger.Error("Failed to update execution step to WAITING state", "worker", w.id, "step", step.ID, "error", updErr)
 			}
@@ -159,10 +234,10 @@ func (w *Worker) processOne(ctx context.Context) {
 
 		w.engine.logger.Error("Step execution failed", "worker", w.id, "step", step.ID, "attempt", step.AttemptNumber, "error", err)
 
-		// Dynamic Retry Policy
 		policy := w.getRetryPolicy(wf, step.NodeID)
+		permanent := IsPermanent(err)
 
-		if step.AttemptNumber < policy.MaxAttempts {
+		if !permanent && step.AttemptNumber < policy.MaxAttempts {
 			step.AttemptNumber++
 			delay := w.calculateBackoff(policy, step.AttemptNumber)
 
@@ -181,7 +256,11 @@ func (w *Worker) processOne(ctx context.Context) {
 
 		// Hard Fail
 		step.Status = models.TaskFailed
-		step.Error = fmt.Sprintf("Max retries reached: %v", err)
+		if permanent {
+			step.Error = err.Error()
+		} else {
+			step.Error = fmt.Sprintf("Max retries reached: %v", err)
+		}
 		now := time.Now()
 		step.FinishedAt = &now
 		GetTelemetry().IncProcessed(step.Namespace, nodeType, "failed")
@@ -224,15 +303,77 @@ func (w *Worker) getRetryPolicy(wf *models.Workflow, nodeID string) *models.Retr
 	}
 }
 
+// calculateBackoff returns the delay before retry number `attempt` (1-based):
+// InitialInterval * BackoffCoefficient^(attempt-1), capped at MaximumInterval.
 func (w *Worker) calculateBackoff(policy *models.RetryPolicy, attempt int) time.Duration {
-	delay := time.Duration(float64(policy.InitialInterval) * (policy.BackoffCoefficient))
-	if attempt > 1 {
-		delay = time.Duration(float64(policy.InitialInterval) * float64(attempt) * policy.BackoffCoefficient)
+	coef := policy.BackoffCoefficient
+	if coef < 1 {
+		coef = 1
 	}
-	if delay > policy.MaximumInterval {
-		delay = policy.MaximumInterval
+	delay := float64(policy.InitialInterval)
+	for i := 1; i < attempt; i++ {
+		delay *= coef
+		if policy.MaximumInterval > 0 && delay >= float64(policy.MaximumInterval) {
+			break
+		}
 	}
-	return delay
+	d := time.Duration(delay)
+	if policy.MaximumInterval > 0 && d > policy.MaximumInterval {
+		d = policy.MaximumInterval
+	}
+	return d
+}
+
+// heartbeatInterval is how often a running step's lease is renewed.
+var heartbeatInterval = 30 * time.Second
+
+// startHeartbeat renews the step lease until the returned stop func is called,
+// so long-running steps are not reclaimed and executed twice by another worker.
+func (w *Worker) startHeartbeat(ctx context.Context, step *models.ExecutionStep) func() {
+	hb, ok := w.engine.storage.(storage.StepHeartbeater)
+	if !ok {
+		return func() {}
+	}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(heartbeatInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				owned, err := hb.HeartbeatStep(ctx, step.Namespace, step.ID, w.id)
+				if err != nil {
+					w.engine.logger.Warn("Step heartbeat failed", "worker", w.id, "step", step.ID, "error", err)
+				} else if !owned {
+					w.engine.logger.Warn("Step lease lost", "worker", w.id, "step", step.ID)
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		wg.Wait()
+	}
+}
+
+// failStepHard marks a claimed step FAILED when it cannot even be executed.
+func (w *Worker) failStepHard(ctx context.Context, step *models.ExecutionStep, err error) {
+	w.engine.logger.Error("Step cannot be executed", "worker", w.id, "step", step.ID, "error", err)
+	step.Status = models.TaskFailed
+	step.Error = err.Error()
+	now := time.Now()
+	step.FinishedAt = &now
+	if uerr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); uerr != nil {
+		w.engine.logger.Error("Failed to update step", "worker", w.id, "step", step.ID, "error", uerr)
+	}
+	_ = w.engine.failExecution(ctx, step.Namespace, step.ExecutionID, step.Error)
 }
 
 func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, step *models.ExecutionStep, exec *models.Execution, err error) bool {
@@ -241,7 +382,7 @@ func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, st
 			w.engine.logger.Info("Triggering Saga Compensation", "execution", exec.ID, "failed_node", n.ID, "compensation_node", n.CompensateNodeID)
 
 			rec := &models.CompensationRecord{
-				ID:               fmt.Sprintf("jrnl-%s", step.ID),
+				ID:               derivedID("journal", step.ID),
 				Namespace:        step.Namespace,
 				ExecutionID:      step.ExecutionID,
 				FailedNodeID:     n.ID,
@@ -259,15 +400,15 @@ func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, st
 			})
 
 			compStep := &models.ExecutionStep{
-				ID:          fmt.Sprintf("comp-%s", step.ID),
+				ID:          derivedID("compensation", step.ID),
 				Namespace:   step.Namespace,
 				ExecutionID: step.ExecutionID,
 				NodeID:      n.CompensateNodeID,
 				Status:      models.TaskPending,
-				Input:       fmt.Sprintf(`{"reason": "compensation", "failedNode": "%s", "error": "%s"}`, n.ID, err.Error()),
+				Input:       compensationInput(n.ID, err),
 				StartedAt:   time.Now(),
 			}
-			if err := w.engine.storage.CreateExecutionStep(ctx, step.Namespace, compStep); err != nil {
+			if _, err := w.engine.createStep(ctx, step.Namespace, compStep); err != nil {
 				w.engine.logger.Error("Failed to create compensation step", "execution", exec.ID, "step", compStep.ID, "error", err)
 			}
 			return true
@@ -276,29 +417,64 @@ func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, st
 	return false
 }
 
-func (w *Worker) executeStep(ctx context.Context, step *models.ExecutionStep) (string, error) {
-	exec, err := w.engine.storage.GetExecution(ctx, step.Namespace, step.ExecutionID)
-	if err != nil {
-		return "", err
+func compensationInput(failedNode string, err error) string {
+	b, _ := json.Marshal(map[string]interface{}{
+		"reason":     "compensation",
+		"failedNode": failedNode,
+		"error":      err.Error(),
+	})
+	return string(b)
+}
+
+func (w *Worker) executeStep(ctx context.Context, step *models.ExecutionStep, exec *models.Execution, wf *models.Workflow) (string, error) {
+	n := FindNode(wf, step.NodeID)
+	if n == nil {
+		return "", fmt.Errorf("node %s not found in workflow", step.NodeID)
 	}
-	wf, err := w.engine.storage.GetWorkflow(ctx, step.Namespace, exec.WorkflowID)
+	executor, err := w.registry.Get(n.Type)
 	if err != nil {
 		return "", err
 	}
 
 	ctx = WithExecutionContext(ctx, step.Namespace, step.ExecutionID)
 	ctx = WithEngine(ctx, w.engine)
+	w.engine.emit(ctx, Event{Type: EventTypeStepStarted, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf})
 
-	for _, n := range wf.Nodes {
-		if n.ID == step.NodeID {
-			executor, err := w.registry.Get(n.Type)
-			if err != nil {
-				return "", err
-			}
-			w.engine.emit(ctx, Event{Type: EventTypeStepStarted, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf})
-			return executor.Execute(ctx, n.Config, step.Input)
-		}
+	timeout, err := stepTimeout(n)
+	if err != nil {
+		return "", err
 	}
-
-	return "", fmt.Errorf("node %s not found in workflow", step.NodeID)
+	if timeout <= 0 {
+		return executor.Execute(ctx, n.Config, step.Input)
+	}
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	out, err := executor.Execute(execCtx, n.Config, step.Input)
+	if err != nil && errors.Is(execCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		return "", fmt.Errorf("step timed out after %s: %w", timeout, err)
+	}
+	return out, err
 }
+
+// stepTimeout reads the optional "execution_timeout" node config (Go
+// duration string, e.g. "30s"). Zero means no timeout.
+func stepTimeout(n *models.Node) (time.Duration, error) {
+	raw, ok := n.Config["execution_timeout"]
+	if !ok {
+		return 0, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return 0, invalidConfigError(fmt.Sprintf("node %s: execution_timeout must be a duration string", n.ID))
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, invalidConfigError(fmt.Sprintf("node %s: invalid execution_timeout %q", n.ID, s))
+	}
+	return d, nil
+}
+
+type invalidConfigError string
+
+func (e invalidConfigError) Error() string   { return string(e) }
+func (e invalidConfigError) Permanent() bool { return true }

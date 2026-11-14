@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dgmos/flow/internal/models"
 	"github.com/dgmos/flow/internal/storage"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 )
 
 type Dialect interface {
@@ -70,7 +73,7 @@ func (s *SQLStorage) ph(query string) string {
 	for i := 0; i < len(query); i++ {
 		if query[i] == '?' {
 			b.WriteByte('$')
-			b.WriteString(fmt.Sprintf("%d", n))
+			b.WriteString(strconv.Itoa(n))
 			n++
 		} else {
 			b.WriteByte(query[i])
@@ -631,7 +634,48 @@ func (s *SQLStorage) CreateExecutionStep(ctx context.Context, namespace string, 
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx, q,
 		step.ID, step.Namespace, step.ExecutionID, step.NodeID, step.Status, jsonColumnArg(input), meta, step.WorkerID, step.ScheduledAt, step.StartedAt, now)
+	if err != nil && isDuplicateKeyErr(err) {
+		return storage.ErrStepExists
+	}
 	return err
+}
+
+// isDuplicateKeyErr reports whether err is a primary/unique key violation.
+func isDuplicateKeyErr(err error) bool {
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) {
+		return myErr.Number == 1062
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505"
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "duplicate entry") || strings.Contains(msg, "unique constraint")
+}
+
+// HeartbeatStep extends the lease of a RUNNING step owned by workerID.
+func (s *SQLStorage) HeartbeatStep(ctx context.Context, namespace, stepID, workerID string) (bool, error) {
+	q := s.ph(fmt.Sprintf("UPDATE %s SET updated_at = ? WHERE id = ? AND namespace = ? AND status = 'RUNNING' AND worker_id = ?", s.t("execution_steps")))
+	res, err := s.db.ExecContext(ctx, q, time.Now(), stepID, namespace, workerID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	// MySQL reports changed (not matched) rows: a heartbeat in the same second
+	// as the previous write changes nothing. Confirm ownership explicitly.
+	var owned int
+	cq := s.ph(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = ? AND namespace = ? AND status = 'RUNNING' AND worker_id = ?", s.t("execution_steps")))
+	if err := s.db.GetContext(ctx, &owned, cq, stepID, namespace, workerID); err != nil {
+		return false, err
+	}
+	return owned > 0, nil
 }
 
 func (s *SQLStorage) UpdateExecutionStep(ctx context.Context, namespace string, step *models.ExecutionStep) error {
@@ -700,8 +744,12 @@ func (s *SQLStorage) ClaimReadyStep(ctx context.Context, namespace string, worke
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	q := fmt.Sprintf("SELECT * FROM %s WHERE (status = 'PENDING' AND (scheduled_at IS NULL OR scheduled_at <= ?)) OR (status = 'RUNNING' AND updated_at <= ?)", s.t("execution_steps"))
-	args := []interface{}{time.Now(), time.Now().Add(-5 * time.Minute)}
+	// The PENDING/stale-RUNNING alternatives must be parenthesised as a group:
+	// AND binds tighter than OR, so an unparenthesised namespace filter would
+	// only apply to the RUNNING branch and leak PENDING steps across namespaces.
+	q := fmt.Sprintf("SELECT * FROM %s WHERE ((status = 'PENDING' AND (scheduled_at IS NULL OR scheduled_at <= ?)) OR (status = 'RUNNING' AND updated_at <= ?))", s.t("execution_steps"))
+	now := time.Now()
+	args := []interface{}{now, now.Add(-storage.StaleStepThreshold)}
 	if namespace != "" {
 		q += " AND namespace = ?"
 		args = append(args, namespace)
@@ -719,7 +767,7 @@ func (s *SQLStorage) ClaimReadyStep(ctx context.Context, namespace string, worke
 	}
 
 	updateQuery := s.ph(fmt.Sprintf("UPDATE %s SET status = ?, worker_id = ?, started_at = ?, updated_at = ? WHERE id = ? AND namespace = ?", s.t("execution_steps")))
-	if _, err = tx.ExecContext(ctx, updateQuery, "RUNNING", workerID, time.Now(), time.Now(), row.ID, row.Namespace); err != nil {
+	if _, err = tx.ExecContext(ctx, updateQuery, "RUNNING", workerID, now, now, row.ID, row.Namespace); err != nil {
 		return nil, err
 	}
 

@@ -1,0 +1,159 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+## [Unreleased]
+
+This release fixes several correctness bugs in scheduling and storage, and
+hardens the engine for running untrusted workflow definitions (e.g. imported
+templates). **It contains behavior changes that need action before deploying**;
+read the [Upgrade guide](#upgrade-guide) first.
+
+### Security
+
+- **SSRF protection for `http` and `notify` nodes.** By default they can only
+  reach public internet addresses. Loopback, private (RFC 1918 / ULA),
+  link-local (including the `169.254.169.254` cloud metadata endpoint), CGNAT
+  and multicast ranges are blocked. The check runs on the resolved IP of every
+  connection, so redirects and DNS rebinding cannot bypass it. Only
+  `http`/`https` URLs are allowed. Configure with `Engine.SetOutboundPolicy`.
+- HTTP response bodies are capped at 10 MiB (`OutboundPolicy.MaxResponseBytes`).
+- `FailExecution` and `GetExecutionSteps` now go through the `AuthProvider`
+  (actions `fail` and `view` on `execution:<ns>:<id>`).
+
+### Fixed
+
+- **SQL: workers claimed steps from other namespaces.** An operator-precedence
+  bug in `ClaimReadyStep` applied the namespace filter only to stale RUNNING
+  steps, so a worker pinned to one namespace also ran PENDING steps of every
+  other namespace.
+- **Long-running steps were executed twice.** Steps running longer than
+  5 minutes were reclaimed by another worker. Workers now renew a lease every
+  30s; a step is reclaimed only after 5 minutes without a heartbeat.
+- **Join nodes could run twice or never.** When parallel branches finished at
+  the same time, the join node could be scheduled twice. Steps now have
+  deterministic IDs per (execution, node), so duplicates are rejected.
+- **Wrong skipping at merge points.** A node fed by an untaken IF/switch branch
+  *and* by another branch was skipped even when the other branch completed. A
+  node now runs when at least one incoming edge is active and is skipped only
+  when all incoming edges are dead.
+- **Redis: retries never ran.** A step rescheduled for retry was not put back
+  in the queue.
+- **Redis: claimed steps were lost** if a worker crashed right after claiming,
+  and Redis errors during claim were silently ignored.
+- **Cyclic workflows were accepted** and hung. `RegisterWorkflow`,
+  `StartWorkflow` and `ImportStepChain` now reject cycles.
+- `StartWorkflow` left an orphan RUNNING execution when node validation failed.
+- A cancelled execution could be overwritten as COMPLETED by a finishing step.
+- Finishing an execution could overwrite execution variables with stale data.
+- Compensation step input was invalid JSON when the error contained quotes.
+- Compensation step and journal IDs (`comp-…`, `jrnl-…`) exceeded the
+  36-character SQL `id` column, so they failed to save on SQL backends.
+- Retry backoff is now exponential as documented:
+  `InitialInterval * BackoffCoefficient^(n-1)`, capped at `MaximumInterval`.
+- Condition node: numbers are compared numerically for `==`/`!=`
+  (`5 == "5.0"`), ordering no longer accepts partial numbers
+  (`"10 apples" > 5` is false), and unknown operators fail validation.
+- In-memory storage returned internal pointers, causing data races.
+- Possible nil-pointer panics in the worker when an execution or workflow
+  could not be loaded.
+
+### Added
+
+- `Engine.StartWorkerWithOptions` / `Worker.SetConcurrency`: process steps in
+  parallel (`WorkerOptions{Concurrency, PollInterval}`). Busy workers claim the
+  next step immediately instead of waiting for the poll interval.
+- Graceful worker shutdown: on context cancellation in-flight steps are
+  released back to PENDING without consuming a retry attempt, and `Start`
+  returns once they are released.
+- `execution_timeout` node config (Go duration, e.g. `"45s"`).
+- `PermanentError`: executor errors implementing `Permanent() bool` fail the
+  step without retries. Policy violations and invalid config are permanent.
+- `OutboundPolicy`, `Engine.SetOutboundPolicy`, `ErrDestinationBlocked`,
+  `ErrResponseTooLarge`.
+- Storage: `storage.ErrStepExists` and the optional `StepHeartbeater`
+  interface (implemented by the memory, SQL and Redis backends).
+
+### Changed
+
+- Prometheus: `flow_workflows_failed_total` label `error` is renamed to
+  `failed_node` and now holds the failed node ID (the raw error message caused
+  unbounded label cardinality).
+- Execution `Output` is the output of the most recently finished completed
+  step (was: whichever step storage returned last).
+- Join node input (multiple predecessors) contains only predecessors whose
+  edge was taken; skipped predecessors are omitted instead of `null`.
+- Tooling: golangci-lint config migrated to v2 and pinned in CI; `gofmt`
+  enforced; CI now runs the tests of every package.
+
+## Upgrade guide
+
+No database migration is needed. Executions that are in progress during the
+upgrade continue with the new version.
+
+### Required before deploying
+
+1. **Allow internal HTTP destinations.** Any workflow whose `http` or `notify`
+   node calls `localhost`, a private IP or an internal hostname will fail with
+   `ErrDestinationBlocked`. Allow them explicitly after `NewEngine`:
+
+   ```go
+   engine.SetOutboundPolicy(flow.OutboundPolicy{
+       AllowedHosts: []string{"billing.internal", "10.20.0.0/16"},
+   })
+   ```
+
+   Use `AllowPrivateNetworks: true` only if every workflow definition is fully
+   trusted.
+
+2. **Check for egress proxies.** `HTTP_PROXY` / `HTTPS_PROXY` are now ignored by
+   the `http` and `notify` nodes (a proxy would bypass the destination check).
+   If production reaches the internet only through a proxy, these nodes will
+   fail. Proxy support is not available yet — do not deploy until it is added.
+
+3. **Update dashboards and alerts** that use the `error` label of
+   `flow_workflows_failed_total`:
+
+   ```promql
+   # before
+   sum by (error) (rate(flow_workflows_failed_total[5m]))
+   # after
+   sum by (failed_node) (rate(flow_workflows_failed_total[5m]))
+   ```
+
+   Alerts that filter on `error` will silently stop firing.
+
+4. **Upgrade all workers at once.** Old and new workers must not run side by
+   side: old workers still have the cross-namespace claim bug and do not send
+   heartbeats. Stop old workers before starting new ones.
+
+### Check if it applies to you
+
+- **Custom `AuthProvider` with an action allow-list:** allow the new `fail`
+  action for callers of `FailExecution`, and make sure `view` on
+  `execution:<ns>:<id>` is allowed for code that calls
+  `Engine.GetExecutionSteps` directly (the REST steps endpoint already
+  required it).
+- **Large HTTP responses:** responses over 10 MiB now fail the step. Raise
+  `OutboundPolicy.MaxResponseBytes` (`-1` = unlimited).
+- **Merge-point workflows:** nodes fed by an untaken branch and another branch
+  now run instead of being skipped. Review workflows that relied on the old
+  behavior.
+- **Retry timing:** with the default policy retries now happen after 10s, 20s
+  and 40s (previously 20s, 40s and 60s).
+- **Compensation IDs:** compensation step and journal IDs are UUIDs; code that
+  matched the `comp-` or `jrnl-` prefixes must change.
+- **Condition node:** workflows with an unknown operator are now rejected at
+  start instead of failing at run time.
+- **Custom `Storage` implementations:** `CreateExecutionStep` must return
+  `storage.ErrStepExists` when a step with the same ID already exists — it must
+  not overwrite it. Optionally implement `storage.StepHeartbeater` so
+  long-running steps are not reclaimed.
+
+### After deploying (Redis backend only)
+
+Steps that were rescheduled for retry under the previous version were never
+re-queued and stay `PENDING` forever. They are not recovered automatically.
+Find executions in `RUNNING` with a `PENDING` step that is missing from the
+`pending:<namespace>` sorted set and either re-queue the step
+(`ZADD pending:<namespace> <unix-ts> <step-id>`) or cancel the execution.

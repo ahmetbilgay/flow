@@ -1,25 +1,34 @@
+version: "2"
 run:
-  timeout: 5m
   tests: true
-
 linters:
+  settings:
+    errcheck:
+      check-type-assertions: false
+      exclude-functions:
+        - (*encoding/json.Encoder).Encode
+        - (io.Closer).Close
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-
-linters-settings:
-  errcheck:
-    check-type-assertions: false
-    exclude-functions:
-      - (*encoding/json.Encoder).Encode
-      - (io.Closer).Close
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

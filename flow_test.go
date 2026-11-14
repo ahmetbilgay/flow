@@ -1945,6 +1945,8 @@ func TestHTTPNodeExecution(t *testing.T) {
 	storage := flow.NewMemoryStorage()
 	registry := flow.NewRegistry()
 	engine := flow.NewEngine(storage, registry)
+	// The test server listens on loopback, which the default policy blocks.
+	engine.SetOutboundPolicy(flow.OutboundPolicy{AllowedHosts: []string{"127.0.0.1"}})
 	ctx := context.Background()
 
 	wfBuilder := flow.NewWorkflow("http-wf", "HTTP Test")
@@ -1995,6 +1997,8 @@ func TestNotifyNodeExecution(t *testing.T) {
 	storage := flow.NewMemoryStorage()
 	registry := flow.NewRegistry()
 	engine := flow.NewEngine(storage, registry)
+	// The test server listens on loopback, which the default policy blocks.
+	engine.SetOutboundPolicy(flow.OutboundPolicy{AllowedHosts: []string{"127.0.0.1"}})
 	ctx := context.Background()
 
 	wfBuilder := flow.NewWorkflow("notify-wf", "Notify Test")

@@ -31,10 +31,14 @@ func (r *RedisStorage) SetEncryption(crypto *storage.Crypto) {
 }
 
 // Helper keys
-func wfKey(ns, id string) string            { return fmt.Sprintf("wf:%s:%s", ns, id) }
-func execKey(ns, id string) string          { return fmt.Sprintf("ex:%s:%s", ns, id) }
-func stepKey(ns, id string) string          { return fmt.Sprintf("step:%s:%s", ns, id) }
-func pendingSet(ns string) string           { return fmt.Sprintf("pending:%s", ns) }
+func wfKey(ns, id string) string   { return fmt.Sprintf("wf:%s:%s", ns, id) }
+func execKey(ns, id string) string { return fmt.Sprintf("ex:%s:%s", ns, id) }
+func stepKey(ns, id string) string { return fmt.Sprintf("step:%s:%s", ns, id) }
+func pendingSet(ns string) string  { return fmt.Sprintf("pending:%s", ns) }
+
+// runningSet holds claimed step IDs scored by their last heartbeat (unix
+// seconds). Entries older than storage.StaleStepThreshold are reclaimable.
+func runningSet(ns string) string           { return fmt.Sprintf("running:%s", ns) }
 func wfListKey(ns string) string            { return fmt.Sprintf("wfs:%s", ns) }
 func execListKey(ns string) string          { return fmt.Sprintf("execs:%s", ns) }
 func execStepsKey(ns, execID string) string { return fmt.Sprintf("ex_steps:%s:%s", ns, execID) }
@@ -115,9 +119,17 @@ func (r *RedisStorage) ListExecutions(ctx context.Context, namespace string) ([]
 }
 
 func (r *RedisStorage) CreateExecutionStep(ctx context.Context, namespace string, step *models.ExecutionStep) error {
+	step.Namespace = namespace
 	step.UpdatedAt = time.Now()
-	data, _ := json.Marshal(step)
-	err := r.client.Set(ctx, stepKey(namespace, step.ID), data, 0).Err()
+	data, err := json.Marshal(step)
+	if err != nil {
+		return err
+	}
+	// SETNX makes creation idempotent for deterministic step IDs.
+	err = r.client.SetArgs(ctx, stepKey(namespace, step.ID), data, redis.SetArgs{Mode: "NX"}).Err()
+	if err == redis.Nil {
+		return storage.ErrStepExists
+	}
 	if err != nil {
 		return err
 	}
@@ -130,7 +142,10 @@ func (r *RedisStorage) CreateExecutionStep(ctx context.Context, namespace string
 	if step.Status != models.TaskPending {
 		return nil
 	}
+	return r.enqueuePending(ctx, namespace, step)
+}
 
+func (r *RedisStorage) enqueuePending(ctx context.Context, namespace string, step *models.ExecutionStep) error {
 	score := float64(time.Now().Unix())
 	if step.ScheduledAt != nil {
 		score = float64(step.ScheduledAt.Unix())
@@ -143,17 +158,31 @@ func (r *RedisStorage) CreateExecutionStep(ctx context.Context, namespace string
 
 func (r *RedisStorage) UpdateExecutionStep(ctx context.Context, namespace string, step *models.ExecutionStep) error {
 	step.UpdatedAt = time.Now()
-	data, _ := json.Marshal(step)
-	err := r.client.Set(ctx, stepKey(namespace, step.ID), data, 0).Err()
+	data, err := json.Marshal(step)
 	if err != nil {
 		return err
 	}
-
-	// If finished, remove from pending
-	if step.Status != models.TaskPending {
-		r.client.ZRem(ctx, pendingSet(namespace), step.ID)
+	if err := r.client.Set(ctx, stepKey(namespace, step.ID), data, 0).Err(); err != nil {
+		return err
 	}
-	return nil
+
+	switch step.Status {
+	case models.TaskPending:
+		// Retries reschedule the step: it must be queued again, otherwise it
+		// would never be picked up after the claim removed it from the queue.
+		if err := r.client.ZRem(ctx, runningSet(namespace), step.ID).Err(); err != nil {
+			return err
+		}
+		return r.enqueuePending(ctx, namespace, step)
+	case models.TaskRunning:
+		return nil
+	default:
+		pipe := r.client.TxPipeline()
+		pipe.ZRem(ctx, pendingSet(namespace), step.ID)
+		pipe.ZRem(ctx, runningSet(namespace), step.ID)
+		_, err := pipe.Exec(ctx)
+		return err
+	}
 }
 
 func (r *RedisStorage) GetExecutionSteps(ctx context.Context, namespace string, executionID string) ([]*models.ExecutionStep, error) {
@@ -172,25 +201,34 @@ func (r *RedisStorage) GetExecutionSteps(ctx context.Context, namespace string, 
 	return steps, nil
 }
 
+// claimScript atomically picks a step and records it in the running set.
+// Stale running entries (crashed workers) take priority over new work so
+// they are not starved. KEYS: pending, running. ARGV: now, staleBefore.
+var claimScript = redis.NewScript(`
+	local stale = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', ARGV[2], 'LIMIT', 0, 1)
+	if #stale > 0 then
+		redis.call('ZADD', KEYS[2], ARGV[1], stale[1])
+		return stale[1]
+	end
+	local steps = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, 1)
+	if #steps > 0 then
+		redis.call('ZREM', KEYS[1], steps[1])
+		redis.call('ZADD', KEYS[2], ARGV[1], steps[1])
+		return steps[1]
+	end
+	return false
+`)
+
 func (r *RedisStorage) ClaimReadyStep(ctx context.Context, namespace string, workerID string) (*models.ExecutionStep, error) {
-	// 10/10 Atomic Claim using LUA
-	// We check for ready steps (score <= now)
-	now := time.Now().Unix()
-	pendingSetKey := pendingSet(namespace)
+	now := time.Now()
+	staleBefore := now.Add(-storage.StaleStepThreshold).Unix()
 
-	// LUA Script: Try to fetch one eligible step, remove it from ZSET, and return its ID
-	script := `
-		local steps = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, 1)
-		if #steps > 0 then
-			redis.call('ZREM', KEYS[1], steps[1])
-			return steps[1]
-		end
-		return nil
-	`
-
-	res, err := r.client.Eval(ctx, script, []string{pendingSetKey}, now).Result()
-	if err == redis.Nil || err != nil {
+	res, err := claimScript.Run(ctx, r.client, []string{pendingSet(namespace), runningSet(namespace)}, now.Unix(), staleBefore).Result()
+	if err == redis.Nil {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	stepID, ok := res.(string)
@@ -199,20 +237,44 @@ func (r *RedisStorage) ClaimReadyStep(ctx context.Context, namespace string, wor
 	}
 
 	step, err := r.GetExecutionStepByID(ctx, namespace, stepID)
+	if err == redis.Nil {
+		// Dangling queue entry without step data; drop it.
+		_ = r.client.ZRem(ctx, runningSet(namespace), stepID).Err()
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 
 	step.Status = models.TaskRunning
 	step.WorkerID = workerID
-	step.StartedAt = time.Now()
-	// Update step data (Status=RUNNING)
-	err = r.UpdateExecutionStep(ctx, namespace, step)
-	if err != nil {
+	step.StartedAt = now
+	if err := r.UpdateExecutionStep(ctx, namespace, step); err != nil {
+		// Still listed in the running set, so it will be reclaimed later.
 		return nil, err
 	}
-
 	return step, nil
+}
+
+// HeartbeatStep extends the lease of a RUNNING step owned by workerID.
+func (r *RedisStorage) HeartbeatStep(ctx context.Context, namespace, stepID, workerID string) (bool, error) {
+	step, err := r.GetExecutionStepByID(ctx, namespace, stepID)
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if step.Status != models.TaskRunning || step.WorkerID != workerID {
+		return false, nil
+	}
+	// XX: only refresh an existing lease, never resurrect a finished step.
+	n, err := r.client.ZAddXX(ctx, runningSet(namespace), redis.Z{Score: float64(time.Now().Unix()), Member: stepID}).Result()
+	if err != nil {
+		return false, err
+	}
+	_ = n // ZADD XX returns 0 for updates; ownership was verified above.
+	return true, nil
 }
 
 func (r *RedisStorage) GetExecutionStepByID(ctx context.Context, namespace string, id string) (*models.ExecutionStep, error) {

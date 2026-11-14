@@ -111,7 +111,7 @@ http.Handle("/metrics", promhttp.Handler())
 *   **İş Akışı Metrikleri**:
     *   `flow_workflows_started_total` (Başlatılan toplam akış)
     *   `flow_workflows_completed_total` (Başarıyla tamamlanan toplam akış)
-    *   `flow_workflows_failed_total` (Başarısız olan toplam akış)
+    *   `flow_workflows_failed_total` (Başarısız olan toplam akış; etiketler: `namespace`, `workflow_id`, `failed_node`)
 *   **Adım Metrikleri**:
     *   `flow_steps_processed_total` (İşlenen adımlar, Etiketler: `namespace`, `node_type`, `status`)
     *   `flow_step_duration_seconds` (Adım işleme süreleri, Etiketler: `namespace`, `node_type`)

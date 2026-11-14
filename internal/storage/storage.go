@@ -2,10 +2,29 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/dgmos/flow/internal/models"
 )
+
+// ErrStepExists is returned by CreateExecutionStep when a step with the same ID
+// already exists. The engine uses deterministic step IDs for DAG nodes, so this
+// error means another goroutine/worker already scheduled the node and the
+// caller should treat creation as a no-op.
+var ErrStepExists = errors.New("execution step already exists")
+
+// StaleStepThreshold is how long a RUNNING step may go without a heartbeat
+// before another worker may reclaim it. Workers heartbeat well within this.
+const StaleStepThreshold = 5 * time.Minute
+
+// StepHeartbeater is optionally implemented by storages that support worker
+// leases. Workers call HeartbeatStep periodically while a step runs so that
+// long-running steps are not reclaimed and executed twice. It returns
+// (false, nil) when the step is no longer owned by workerID.
+type StepHeartbeater interface {
+	HeartbeatStep(ctx context.Context, namespace, stepID, workerID string) (bool, error)
+}
 
 // TaskFilter filters waiting / human task steps.
 type TaskFilter struct {
