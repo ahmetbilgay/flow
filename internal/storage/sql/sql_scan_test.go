@@ -49,14 +49,14 @@ func TestMapStepNullColumns(t *testing.T) {
 func TestMapStepLabelsJSON(t *testing.T) {
 	s := &SQLStorage{}
 	row := &stepRow{
-		ID:         "s",
-		Namespace:  "ns",
+		ID:          "s",
+		Namespace:   "ns",
 		ExecutionID: "e",
-		NodeID:     "n",
-		Status:     "WAITING",
-		LabelsJSON: []byte(`{"tenant":"t1"}`),
-		StartedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		NodeID:      "n",
+		Status:      "WAITING",
+		LabelsJSON:  []byte(`{"tenant":"t1"}`),
+		StartedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 	step := s.mapStep(row)
 	if step.Labels["tenant"] != "t1" {

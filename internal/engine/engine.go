@@ -8,11 +8,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/dgmos/flow/internal/auth"
 	"github.com/dgmos/flow/internal/models"
 	"github.com/dgmos/flow/internal/storage"
 	"github.com/dgmos/flow/internal/telemetry"
+	"github.com/google/uuid"
 )
 
 type Engine struct {
@@ -338,7 +338,6 @@ func (e *Engine) mergeSignalData(existingInput string, signalData string) string
 	if inputMap == nil {
 		inputMap = make(map[string]interface{})
 	}
-
 
 	// Merge: signal data overwrites existing keys
 	for k, v := range signalMap {

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
-	"github.com/jmoiron/sqlx"
 	"github.com/dgmos/flow"
 	"github.com/dgmos/flow/internal/storage/integrationtest"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 )
 
 func TestE2EWorkflowMySQL(t *testing.T) {

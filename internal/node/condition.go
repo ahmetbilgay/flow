@@ -98,8 +98,6 @@ func buildCondOutput(inMap map[string]interface{}, branch string) string {
 	return string(b)
 }
 
-
-
 func (n *ConditionNode) Validate(config map[string]interface{}) error {
 	if _, ok := config["variable"].(string); !ok {
 		return fmt.Errorf("missing 'variable' in condition config")

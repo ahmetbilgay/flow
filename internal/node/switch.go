@@ -12,16 +12,18 @@ import (
 // Config:
 //   - "variable" (string, required): the field name to read from input JSON
 //   - "cases"    (map, required)   : map of expected value -> branch label
-//                                    Example: {"premium": "branch-premium", "free": "branch-free"}
+//     Example: {"premium": "branch-premium", "free": "branch-free"}
 //   - "default"  (string, optional): branch label when no case matches (defaults to "default")
 //
 // Output: JSON with "branch" set to the matched case label.
-//         The DAG engine uses this to follow only the matching edge.
+//
+//	The DAG engine uses this to follow only the matching edge.
 //
 // Usage in workflow edges:
-//   { "sourceId": "switch-node", "targetId": "handle-premium", "condition": "branch-premium" }
-//   { "sourceId": "switch-node", "targetId": "handle-free",    "condition": "branch-free"    }
-//   { "sourceId": "switch-node", "targetId": "handle-default", "condition": "default"        }
+//
+//	{ "sourceId": "switch-node", "targetId": "handle-premium", "condition": "branch-premium" }
+//	{ "sourceId": "switch-node", "targetId": "handle-free",    "condition": "branch-free"    }
+//	{ "sourceId": "switch-node", "targetId": "handle-default", "condition": "default"        }
 type SwitchNode struct{}
 
 func (n *SwitchNode) Execute(_ context.Context, config map[string]interface{}, input string) (string, error) {
@@ -70,7 +72,7 @@ func (n *SwitchNode) Execute(_ context.Context, config map[string]interface{}, i
 }
 
 func buildSwitchOutput(inMap map[string]interface{}, branch string) string {
-	// Merge the branch tag into the existing data so downstream nodes can use original fields  
+	// Merge the branch tag into the existing data so downstream nodes can use original fields
 	out := make(map[string]interface{})
 	for k, v := range inMap {
 		out[k] = v

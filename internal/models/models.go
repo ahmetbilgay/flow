@@ -151,23 +151,23 @@ type LegacyStep struct {
 
 // Schedule is a durable cron trigger for a workflow (tenant-isolated via Namespace).
 type Schedule struct {
-	ID             string     `json:"id" db:"id"`
-	Namespace      string     `json:"namespace" db:"namespace"`
-	WorkflowID     string     `json:"workflow_id" db:"workflow_id"`
-	Name           string     `json:"name,omitempty" db:"name"`
-	CronExpression string     `json:"cron_expression" db:"cron_expression"`
-	Input          string     `json:"input" db:"input"` // JSON string
-	Timezone       string     `json:"timezone" db:"timezone"` // IANA, default UTC
-	IsActive       bool       `json:"is_active" db:"is_active"`
-	CatchUp        bool       `json:"catch_up" db:"catch_up"`
-	CatchUpMax     int        `json:"catch_up_max" db:"catch_up_max"`               // 0 → default 10
-	CatchUpLookbackSec int    `json:"catch_up_lookback_sec" db:"catch_up_lookback_sec"` // 0 → default 86400
-	StartsAt       *time.Time `json:"starts_at,omitempty" db:"starts_at"`
-	EndsAt         *time.Time `json:"ends_at,omitempty" db:"ends_at"`
-	LastRunAt      *time.Time `json:"last_run_at,omitempty" db:"last_run_at"`
-	NextRunAt      *time.Time `json:"next_run_at,omitempty" db:"next_run_at"`
-	LastExecID     string     `json:"last_exec_id,omitempty" db:"last_exec_id"`
-	LastError      string     `json:"last_error,omitempty" db:"last_error"`
-	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
+	ID                 string     `json:"id" db:"id"`
+	Namespace          string     `json:"namespace" db:"namespace"`
+	WorkflowID         string     `json:"workflow_id" db:"workflow_id"`
+	Name               string     `json:"name,omitempty" db:"name"`
+	CronExpression     string     `json:"cron_expression" db:"cron_expression"`
+	Input              string     `json:"input" db:"input"`       // JSON string
+	Timezone           string     `json:"timezone" db:"timezone"` // IANA, default UTC
+	IsActive           bool       `json:"is_active" db:"is_active"`
+	CatchUp            bool       `json:"catch_up" db:"catch_up"`
+	CatchUpMax         int        `json:"catch_up_max" db:"catch_up_max"`                   // 0 → default 10
+	CatchUpLookbackSec int        `json:"catch_up_lookback_sec" db:"catch_up_lookback_sec"` // 0 → default 86400
+	StartsAt           *time.Time `json:"starts_at,omitempty" db:"starts_at"`
+	EndsAt             *time.Time `json:"ends_at,omitempty" db:"ends_at"`
+	LastRunAt          *time.Time `json:"last_run_at,omitempty" db:"last_run_at"`
+	NextRunAt          *time.Time `json:"next_run_at,omitempty" db:"next_run_at"`
+	LastExecID         string     `json:"last_exec_id,omitempty" db:"last_exec_id"`
+	LastError          string     `json:"last_error,omitempty" db:"last_error"`
+	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }

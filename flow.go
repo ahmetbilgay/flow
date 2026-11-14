@@ -39,7 +39,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/dgmos/flow/internal/auth"
 	"github.com/dgmos/flow/internal/builder"
 	"github.com/dgmos/flow/internal/engine"
@@ -51,6 +50,7 @@ import (
 	sqlstore "github.com/dgmos/flow/internal/storage/sql"
 	"github.com/dgmos/flow/internal/telemetry"
 	"github.com/dgmos/flow/internal/trigger"
+	"github.com/jmoiron/sqlx"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

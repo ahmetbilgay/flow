@@ -156,10 +156,10 @@ func (n *AINode) Validate(config map[string]interface{}) error {
 // ──────────────────────────────────────────────────────────────
 
 type openAIRequest struct {
-	Model       string              `json:"model"`
-	Messages    []openAIMessage     `json:"messages"`
-	Temperature float64             `json:"temperature"`
-	MaxTokens   int                 `json:"max_tokens"`
+	Model       string          `json:"model"`
+	Messages    []openAIMessage `json:"messages"`
+	Temperature float64         `json:"temperature"`
+	MaxTokens   int             `json:"max_tokens"`
 }
 
 type openAIMessage struct {
@@ -227,11 +227,11 @@ func (n *AINode) callOpenAI(ctx context.Context, apiKey, model, systemPrompt, pr
 // ──────────────────────────────────────────────────────────────
 
 type anthropicRequest struct {
-	Model       string              `json:"model"`
-	Messages    []anthropicMessage  `json:"messages"`
-	MaxTokens   int                 `json:"max_tokens"`
-	Temperature float64             `json:"temperature,omitempty"`
-	System      string              `json:"system,omitempty"`
+	Model       string             `json:"model"`
+	Messages    []anthropicMessage `json:"messages"`
+	MaxTokens   int                `json:"max_tokens"`
+	Temperature float64            `json:"temperature,omitempty"`
+	System      string             `json:"system,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -294,8 +294,8 @@ func (n *AINode) callAnthropic(ctx context.Context, apiKey, model, systemPrompt,
 // ──────────────────────────────────────────────────────────────
 
 type geminiRequest struct {
-	Contents         []geminiContent         `json:"contents"`
-	GenerationConfig geminiGenerationConfig  `json:"generationConfig"`
+	Contents         []geminiContent        `json:"contents"`
+	GenerationConfig geminiGenerationConfig `json:"generationConfig"`
 }
 
 type geminiContent struct {

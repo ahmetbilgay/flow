@@ -30,9 +30,9 @@ func main() {
 				Type: flow.NodeTypeHumanTask,
 				Name: "Yönetici Onayı",
 				Config: map[string]interface{}{
-					"assignees":       []string{"manager@example.com"},
-					"claim_mode":      "any",
-					"execution_mode":  "interactive",
+					"assignees":      []string{"manager@example.com"},
+					"claim_mode":     "any",
+					"execution_mode": "interactive",
 				},
 				Meta: map[string]interface{}{
 					"title":       "Leave Approval",

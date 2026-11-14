@@ -1,8 +1,8 @@
 package builder
 
 import (
-	"github.com/google/uuid"
 	"github.com/dgmos/flow/internal/models"
+	"github.com/google/uuid"
 )
 
 type WorkflowBuilder struct {
@@ -62,7 +62,7 @@ func (nb *NodeBuilder) Then(targetID string) *NodeBuilder {
 		TargetID: targetID,
 	}
 	b.workflow.Edges = append(b.workflow.Edges, edge)
-	
+
 	// Find and return the target node builder if it exists
 	for i := range b.workflow.Nodes {
 		if b.workflow.Nodes[i].ID == targetID {
@@ -81,7 +81,7 @@ func (nb *NodeBuilder) If(targetID string, condition string) *NodeBuilder {
 		Condition: condition,
 	}
 	b.workflow.Edges = append(b.workflow.Edges, edge)
-	
+
 	// Find and return the target node builder
 	for i := range b.workflow.Nodes {
 		if b.workflow.Nodes[i].ID == targetID {

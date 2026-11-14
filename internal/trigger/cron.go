@@ -179,7 +179,7 @@ func (c *CronManager) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
-	// Hold lock only for started flag flip after load registration — load storage outside? 
+	// Hold lock only for started flag flip after load registration — load storage outside?
 	// Keep lock through registration to prevent concurrent Start.
 	c.logger.Info("CronManager: loading active schedules from storage", "instanceId", c.instanceID)
 	c.mu.Unlock()
@@ -259,7 +259,7 @@ func (c *CronManager) AddScheduleWithOpts(ctx context.Context, namespace, workfl
 		CronExpression: cronExpr, Input: input, Timezone: tzName, IsActive: true,
 		CatchUp: opts.CatchUp, CatchUpMax: opts.CatchUpMax,
 		CatchUpLookbackSec: int(opts.CatchUpLookback.Seconds()),
-		StartsAt: opts.StartsAt, EndsAt: opts.EndsAt, NextRunAt: next,
+		StartsAt:           opts.StartsAt, EndsAt: opts.EndsAt, NextRunAt: next,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := c.storage.SaveSchedule(ctx, sched); err != nil {

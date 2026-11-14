@@ -32,8 +32,12 @@ func (t *Telemetry) WorkerStopped(id string) {
 }
 
 // Keep legacy methods for basic worker support (mapped to default labels)
-func (t *Telemetry) IncFailed()  { telemetry.StepsProcessed.WithLabelValues("unknown", "unknown", "failed").Inc() }
-func (t *Telemetry) IncRetried() { telemetry.StepsProcessed.WithLabelValues("unknown", "unknown", "retried").Inc() }
+func (t *Telemetry) IncFailed() {
+	telemetry.StepsProcessed.WithLabelValues("unknown", "unknown", "failed").Inc()
+}
+func (t *Telemetry) IncRetried() {
+	telemetry.StepsProcessed.WithLabelValues("unknown", "unknown", "retried").Inc()
+}
 func (t *Telemetry) IncProcessedLegacy() {
 	telemetry.StepsProcessed.WithLabelValues("unknown", "unknown", "completed").Inc()
 }

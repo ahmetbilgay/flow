@@ -21,7 +21,7 @@ func TestInteractiveHumanTaskApprove(t *testing.T) {
 			{
 				ID: "approve", Type: flow.NodeTypeHumanTask, Name: "Approve",
 				Config: map[string]interface{}{
-					"assignees": []string{"u1"},
+					"assignees":  []string{"u1"},
 					"claim_mode": "any",
 				},
 				Meta: map[string]interface{}{"title": "Approve me"},

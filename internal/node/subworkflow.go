@@ -41,7 +41,7 @@ func (s *SubWorkflowNode) Execute(ctx context.Context, config map[string]interfa
 	}
 
 	// 2. Poll for Completion (Simplified Child Workflow Pattern)
-	// In a real high-load system, this would be handled by event triggers, 
+	// In a real high-load system, this would be handled by event triggers,
 	// but for our minimalist engine, polling with backoff is robust.
 	for {
 		select {
@@ -62,7 +62,7 @@ func (s *SubWorkflowNode) Execute(ctx context.Context, config map[string]interfa
 			if exec.Status == models.TaskCancelled {
 				return "", fmt.Errorf("sub-workflow %s was cancelled", childExecID)
 			}
-			
+
 			// Continue polling...
 		}
 	}

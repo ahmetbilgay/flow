@@ -31,12 +31,12 @@ func (r *RedisStorage) SetEncryption(crypto *storage.Crypto) {
 }
 
 // Helper keys
-func wfKey(ns, id string) string { return fmt.Sprintf("wf:%s:%s", ns, id) }
-func execKey(ns, id string) string { return fmt.Sprintf("ex:%s:%s", ns, id) }
-func stepKey(ns, id string) string { return fmt.Sprintf("step:%s:%s", ns, id) }
-func pendingSet(ns string) string { return fmt.Sprintf("pending:%s", ns) }
-func wfListKey(ns string) string { return fmt.Sprintf("wfs:%s", ns) }
-func execListKey(ns string) string { return fmt.Sprintf("execs:%s", ns) }
+func wfKey(ns, id string) string            { return fmt.Sprintf("wf:%s:%s", ns, id) }
+func execKey(ns, id string) string          { return fmt.Sprintf("ex:%s:%s", ns, id) }
+func stepKey(ns, id string) string          { return fmt.Sprintf("step:%s:%s", ns, id) }
+func pendingSet(ns string) string           { return fmt.Sprintf("pending:%s", ns) }
+func wfListKey(ns string) string            { return fmt.Sprintf("wfs:%s", ns) }
+func execListKey(ns string) string          { return fmt.Sprintf("execs:%s", ns) }
 func execStepsKey(ns, execID string) string { return fmt.Sprintf("ex_steps:%s:%s", ns, execID) }
 
 func (r *RedisStorage) SaveWorkflow(ctx context.Context, namespace string, wf *models.Workflow) error {
@@ -322,8 +322,8 @@ func (r *RedisStorage) ListCompensationRecords(ctx context.Context, namespace, e
 }
 
 func scheduleKey(ns, id string) string { return fmt.Sprintf("sched:%s:%s", ns, id) }
-func scheduleActiveSet() string         { return "schedules:active" }
-func scheduleNSSet(ns string) string    { return fmt.Sprintf("schedules:%s", ns) }
+func scheduleActiveSet() string        { return "schedules:active" }
+func scheduleNSSet(ns string) string   { return fmt.Sprintf("schedules:%s", ns) }
 
 func (r *RedisStorage) SaveSchedule(ctx context.Context, sched *models.Schedule) error {
 	now := time.Now().UTC()

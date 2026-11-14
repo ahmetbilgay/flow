@@ -18,7 +18,7 @@ import (
 //   - "method"  (string, optional) : HTTP method, defaults to POST
 //   - "headers" (map, optional)    : extra headers e.g. {"Authorization": "Bearer xyz"}
 //   - "body"    (string, optional) : Go template for the request body
-//                                    If not set, the raw input JSON is forwarded.
+//     If not set, the raw input JSON is forwarded.
 //
 // Output: raw HTTP response body from the webhook endpoint
 type NotifyNode struct {

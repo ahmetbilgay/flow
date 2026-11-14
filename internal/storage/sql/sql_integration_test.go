@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
-	"github.com/jmoiron/sqlx"
 	"github.com/dgmos/flow/internal/models"
 	"github.com/dgmos/flow/internal/storage"
 	"github.com/dgmos/flow/internal/storage/integrationtest"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 )
 
 func openMySQL(t *testing.T) *SQLStorage {

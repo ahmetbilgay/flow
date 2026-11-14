@@ -14,7 +14,7 @@ func (w *WaitNode) Execute(ctx context.Context, config map[string]interface{}, i
 	duration, _ := time.ParseDuration(durationStr)
 
 	log.Printf("[WAIT] Pausing for %s...\n", duration)
-	
+
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()

@@ -14,7 +14,7 @@ func (s *SignalNode) Execute(ctx context.Context, config map[string]interface{},
 	// It is intended to be moved into TaskWaiting by the worker or engine.
 	// However, since our worker currently handles TaskCompleted/TaskFailed,
 	// we need a mechanism to tell the worker: "Stop here, wait for signal".
-	
+
 	// We return a specific error that the worker will interpret as "Wait for Signal".
 	return "", fmt.Errorf("SIGNAL_WAIT")
 }

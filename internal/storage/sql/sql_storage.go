@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/dgmos/flow/internal/models"
 	"github.com/dgmos/flow/internal/storage"
+	"github.com/jmoiron/sqlx"
 )
 
 type Dialect interface {
@@ -455,19 +455,19 @@ func decodeLabels(raw []byte) map[string]string {
 // db:"-" on the model while the table has labels/metadata JSON columns, and
 // input/output/error_message can be NULL (database/sql cannot scan NULL into string).
 type execRow struct {
-	ID           string         `db:"id"`
-	Namespace    string         `db:"namespace"`
-	WorkflowID   string         `db:"workflow_id"`
-	Version      int            `db:"version"`
-	Status       string         `db:"status"`
-	Input        sql.NullString `db:"input"`
-	Output       sql.NullString `db:"output"`
-	LabelsJSON   []byte         `db:"labels"`
-	MetadataJSON []byte         `db:"metadata"`
-	VariablesJSON []byte        `db:"variables"`
-	ErrorMessage sql.NullString `db:"error_message"`
-	StartedAt    time.Time      `db:"started_at"`
-	FinishedAt   *time.Time     `db:"finished_at"`
+	ID            string         `db:"id"`
+	Namespace     string         `db:"namespace"`
+	WorkflowID    string         `db:"workflow_id"`
+	Version       int            `db:"version"`
+	Status        string         `db:"status"`
+	Input         sql.NullString `db:"input"`
+	Output        sql.NullString `db:"output"`
+	LabelsJSON    []byte         `db:"labels"`
+	MetadataJSON  []byte         `db:"metadata"`
+	VariablesJSON []byte         `db:"variables"`
+	ErrorMessage  sql.NullString `db:"error_message"`
+	StartedAt     time.Time      `db:"started_at"`
+	FinishedAt    *time.Time     `db:"finished_at"`
 }
 
 // stepRow is a SQL-scan DTO for the same NULL / labels reasons as execRow.
