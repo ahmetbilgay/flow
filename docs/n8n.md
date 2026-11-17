@@ -2,7 +2,7 @@
 
 Flow can import and run [n8n](https://n8n.io) workflow exports. Every n8n node becomes a durable engine step, so imported workflows get flow's retries, leases, concurrency and persistence while keeping n8n's data model (items, paired items, expressions).
 
-Measured on the 299 most-viewed public n8n templates, **97% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
+Measured on the 299 most-viewed public n8n templates, **296 (99%) import as fully runnable** (every node and feature supported; credentials still have to be provided). The remaining 3 contain invalid expressions (unfilled placeholders such as `{{voice id}}`) and fail in n8n as well. Execute Command, Python Code, STDIO MCP servers and the Local File Trigger need opt-in options (see Security). The importer reports exactly what is missing or needs configuration.
 
 ## Quick start
 
@@ -87,6 +87,10 @@ Read results with `flow.N8NOutputItems(execution.Output)`.
 Loops: Loop Over Items (v3) and any other cycle (e.g. polling: IF → Wait → HTTP → IF) run as one step; nodes inside are not recorded as separate steps.
 
 Waits longer than 65 seconds do not hold a worker: the step is stored as waiting and resumed by the engine (checked every 30 seconds, survives restarts). "Continue on error" settings keep successful items and turn each failing item into an error item, like n8n.
+
+## Community nodes
+
+Tavily, ScrapeNinja, InfraNodus, Blotato and YouTube Transcript are built in; `{placeholder}` values in community AI tools become tool arguments. Other community nodes are reported at import.
 
 ## MCP
 

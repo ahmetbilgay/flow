@@ -470,6 +470,15 @@ func (ec *execCtx) buildTool(s subNode, i int) (aiTool, error) {
 		return ec.vectorStoreTool(s, i)
 	}
 	if fn, ok := integrationToolBase(s.typ); ok {
+		if !strings.HasPrefix(s.typ, "n8n-nodes-base.") {
+			// Community tools mark AI-provided values as {placeholder}.
+			for _, ph := range placeholders(p) {
+				if _, ok := fromProps[ph]; !ok {
+					fromProps[ph] = map[string]interface{}{"type": "string"}
+					fromReq = append(fromReq, ph)
+				}
+			}
+		}
 		return ec.integrationTool(s, fn, name, desc, fromProps, fromReq), nil
 	}
 	return aiTool{}, permanentError{fmt.Sprintf("tool %s is not supported", s.typ)}
@@ -1175,6 +1184,9 @@ func (ec *execCtx) integrationTool(s subNode, fn nodeFunc, name, desc string, pr
 	}
 	return aiTool{def: toolDef{Name: name, Description: desc, Schema: objSchema(props, req)},
 		run: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			if !strings.HasPrefix(s.typ, "n8n-nodes-base.") {
+				s = withPlaceholders(s, args)
+			}
 			tc, err := ec.toolCtx(s, args)
 			if err != nil {
 				return "", err

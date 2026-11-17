@@ -578,6 +578,7 @@
     name = String(name).replace(/^node:/, '');
     if (name === 'crypto') return cryptoModule;
     if (name === 'util') return utilModule;
+    if (name === 'youtube-transcript') return { YoutubeTranscript: { fetchTranscript: promised(function (id, cfg) { return JSON.parse(__ytTranscript(String(id), (cfg && cfg.lang) || '')); }) } };
     throw new Error("Cannot find module '" + name + "' (only 'crypto' and 'util' are available)");
   };
 

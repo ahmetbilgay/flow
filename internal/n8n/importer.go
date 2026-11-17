@@ -480,7 +480,7 @@ var (
 	requireRe = regexp.MustCompile(`\brequire\s*\(\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`]*)`" + `)?`)
 	helpersRe = regexp.MustCompile(`\bhelpers\s*\.\s*([A-Za-z_$][\w$]*)`)
 	// Code node modules and this.helpers methods we provide.
-	codeModules = map[string]bool{"crypto": true, "node:crypto": true, "util": true, "node:util": true}
+	codeModules = map[string]bool{"crypto": true, "node:crypto": true, "util": true, "node:util": true, "youtube-transcript": true}
 	codeHelpers = map[string]bool{"httpRequest": true, "request": true, "prepareBinaryData": true, "getBinaryDataBuffer": true, "binaryToBuffer": true, "returnJsonArray": true}
 )
 

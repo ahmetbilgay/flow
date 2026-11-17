@@ -151,6 +151,8 @@ type Runtime struct {
 	broken bool
 	// fromAI holds the model-provided arguments for $fromAI() in AI tools.
 	fromAI map[string]interface{}
+	// ec is the node context that created the runtime (nil in tests).
+	ec *execCtx
 }
 
 // newRuntime prepares a JS runtime bound to a node execution. items is the
@@ -260,6 +262,16 @@ func (r *Runtime) installHost() error {
 			return out
 		},
 		"__uuid": func() string { return uuid.NewString() },
+		"__ytTranscript": func(id, lang string) string {
+			if r.ec == nil {
+				r.throw("youtube-transcript is not available here")
+			}
+			segs, err := r.ec.fetchYouTubeTranscript(id, lang)
+			if err != nil {
+				r.throw("%v", err)
+			}
+			return mustJSON(segs)
+		},
 		"__randomB64": func(n int) string {
 			out, err := randomB64(n)
 			if err != nil {

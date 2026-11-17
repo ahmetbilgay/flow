@@ -149,6 +149,7 @@ func (ec *execCtx) runtime() (*Runtime, error) {
 		return nil, err
 	}
 	rt.ctx = ec.ctx
+	rt.ec = ec
 	ec.rt = rt
 	return rt, nil
 }
