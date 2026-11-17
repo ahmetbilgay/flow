@@ -363,6 +363,28 @@ func cleanJSError(err error) error {
 }
 
 // setItem selects the current item ($json, $itemIndex).
+// setGlobalJSON defines a JavaScript global from a JSON-compatible value
+// (as native JS objects and arrays, so n8n's prototype helpers apply), or
+// removes it when v is nil.
+func (r *Runtime) setGlobalJSON(name string, v interface{}) error {
+	if v == nil {
+		return r.vm.Set(name, goja.Undefined())
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	parse, ok := goja.AssertFunction(r.vm.Get("JSON").ToObject(r.vm).Get("parse"))
+	if !ok {
+		return errors.New("JSON.parse unavailable")
+	}
+	val, err := parse(goja.Undefined(), r.vm.ToValue(string(b)))
+	if err != nil {
+		return err
+	}
+	return r.vm.Set(name, val)
+}
+
 func (r *Runtime) setItem(i int) {
 	_ = r.vm.Set("$itemIndex", i)
 }

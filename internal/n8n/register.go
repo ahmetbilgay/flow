@@ -89,6 +89,10 @@ func nodeTypes() map[string]nodeFunc {
 		"@n8n/n8n-nodes-langchain.manualChatTrigger": passthrough,
 		// flow
 		b + "noOp":             passthrough,
+		b + "executionData":    executionDataNode,
+		b + "compression":      compressionNode,
+		b + "readPDF":          readPDFNode,
+		b + "crypto":           cryptoNode,
 		b + "if":               ifNode,
 		b + "filter":           filterNode,
 		b + "switch":           switchNode,

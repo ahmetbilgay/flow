@@ -26,6 +26,7 @@ type httpRequestSpec struct {
 	query       [][2]string
 	headers     [][2]string
 	body        io.Reader
+	bodyBytes   []byte // body, buffered so the request can be re-sent (pagination)
 	contentType string
 	timeout     time.Duration
 	format      string // autodetect | json | text | file
@@ -44,7 +45,12 @@ func httpRequestNode(ec *execCtx) ([][]Item, error) {
 		if err != nil {
 			return nil, fmt.Errorf("item %d: %w", i, err)
 		}
-		items, err := doHTTP(ec, client, limit, spec)
+		var items []Item
+		if pg := paginationConfig(ec); pg != nil {
+			items, err = paginateHTTP(ec, i, client, limit, spec, pg)
+		} else {
+			items, err = doHTTP(ec, client, limit, spec)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -311,18 +317,28 @@ func buildHTTPSpecV1(ec *execCtx, i int) (*httpRequestSpec, error) {
 }
 
 func doHTTP(ec *execCtx, client *http.Client, limit int64, s *httpRequestSpec) ([]Item, error) {
+	resp, body, err := sendHTTP(ec, client, limit, s)
+	if err != nil {
+		return nil, err
+	}
+	return httpResponseItems(s, resp, body)
+}
+
+// sendHTTP performs the request described by s and returns the response
+// with its (size-limited) body. Statuses >= 400 are errors unless s.neverError.
+func sendHTTP(ec *execCtx, client *http.Client, limit int64, s *httpRequestSpec) (*http.Response, []byte, error) {
 	if s.url == "" {
-		return nil, permanentError{"HTTP Request: URL is empty"}
+		return nil, nil, permanentError{"HTTP Request: URL is empty"}
 	}
 	u, err := url.Parse(s.url)
 	if err != nil {
-		return nil, permanentError{fmt.Sprintf("HTTP Request: invalid URL %q", s.url)}
+		return nil, nil, permanentError{fmt.Sprintf("HTTP Request: invalid URL %q", s.url)}
 	}
 	if u.Scheme == "" {
 		u, _ = url.Parse("https://" + s.url)
 	}
 	if err := node.CheckScheme(u); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(s.query) > 0 {
 		extra := url.Values{}
@@ -341,9 +357,18 @@ func doHTTP(ec *execCtx, client *http.Client, limit int64, s *httpRequestSpec) (
 		ctx, cancel = context.WithTimeout(ctx, s.timeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(s.method), u.String(), s.body)
+	if s.body != nil && s.bodyBytes == nil {
+		if s.bodyBytes, err = io.ReadAll(s.body); err != nil {
+			return nil, nil, err
+		}
+	}
+	var reqBody io.Reader
+	if s.bodyBytes != nil {
+		reqBody = bytes.NewReader(s.bodyBytes)
+	}
+	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(s.method), u.String(), reqBody)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if s.contentType != "" {
 		req.Header.Set("Content-Type", s.contentType)
@@ -352,7 +377,7 @@ func doHTTP(ec *execCtx, client *http.Client, limit int64, s *httpRequestSpec) (
 		req.Header.Set(h[0], h[1])
 	}
 	if err := authenticateHTTP(ec, req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c := client
 	if !s.follow {
@@ -362,21 +387,21 @@ func doHTTP(ec *execCtx, client *http.Client, limit int64, s *httpRequestSpec) (
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, sanitizeErr(err)
+		return nil, nil, sanitizeErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := node.ReadLimited(resp.Body, limit)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode >= 400 && !s.neverError {
 		snippet := string(body)
 		if len(snippet) > 500 {
 			snippet = snippet[:500] + "…"
 		}
-		return nil, fmt.Errorf("HTTP Request failed with status code %d: %s", resp.StatusCode, snippet)
+		return nil, nil, fmt.Errorf("HTTP Request failed with status code %d: %s", resp.StatusCode, snippet)
 	}
-	return httpResponseItems(s, resp, body)
+	return resp, body, nil
 }
 
 func authenticateHTTP(ec *execCtx, req *http.Request) error {

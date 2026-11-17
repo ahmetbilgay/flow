@@ -2,7 +2,7 @@
 
 Flow, [n8n](https://n8n.io) workflow export'larını içe aktarıp çalıştırabilir. Her n8n node'u kalıcı bir engine adımına dönüşür. Böylece içe aktarılan workflow'lar n8n'in veri modelini (item'lar, paired item'lar, ifadeler) korurken flow'un retry, lease, eşzamanlılık ve kalıcılık özelliklerinden yararlanır.
 
-En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%67'si tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
+En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%71'i tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
 
 ## Hızlı başlangıç
 
@@ -73,7 +73,7 @@ Sonuçları `flow.N8NOutputItems(execution.Output)` ile okuyun.
 
 Tam liste için [İngilizce dokümana](../n8n.md) bakın.
 
-**Desteklenmeyenler:** Python Code, `require()`, `$jmespath`, Split In Batches v1/v2, HTTP pagination, XLS/XLSX, MCP node'ları, community node'lar.
+**Desteklenmeyenler:** Python Code, `require()`, `$jmespath`, XLS/XLSX, MCP node'ları, community node'lar.
 
 ## Güvenlik
 

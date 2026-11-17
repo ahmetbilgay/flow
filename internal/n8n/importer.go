@@ -496,9 +496,6 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 	}
 	switch short(typ) {
 	case "httpRequest":
-		if get("options.pagination") != nil {
-			rep.block(n, "HTTP pagination is not supported")
-		}
 		if get("options.proxy") != nil {
 			rep.warn(n, "HTTP proxy option is ignored")
 		}
