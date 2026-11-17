@@ -183,3 +183,62 @@ func TestRESTIntegrations(t *testing.T) {
 		})
 	}
 }
+
+func TestRSSTriggerDHLAndN8NAPI(t *testing.T) {
+	var feedItems []string
+	f := newFakeAPI(t, func(r recorded) (int, string, interface{}) {
+		switch {
+		case r.path == "/feed.xml":
+			return 200, "application/rss+xml", `<?xml version="1.0"?><rss><channel>` + strings.Join(feedItems, "") + `</channel></rss>`
+		case r.path == "/track/shipments":
+			return 200, "application/json", map[string]interface{}{"shipments": []interface{}{map[string]interface{}{"id": "JD1", "status": map[string]interface{}{"statusCode": "transit"}}}}
+		case r.path == "/api/v1/workflows":
+			if strings.Contains(r.query, "cursor=c2") {
+				return 200, "application/json", map[string]interface{}{"data": []interface{}{map[string]interface{}{"id": "w2"}}}
+			}
+			return 200, "application/json", map[string]interface{}{"data": []interface{}{map[string]interface{}{"id": "w1"}}, "nextCursor": "c2"}
+		}
+		return 404, "application/json", map[string]interface{}{}
+	})
+	item := func(title, date string) string {
+		return "<item><title>" + title + "</title><pubDate>" + date + "</pubDate></item>"
+	}
+	creds := NewStaticCredentials()
+	creds.Set("dhlApi", "*", map[string]interface{}{"apiKey": "dk"})
+	creds.Set("n8nApi", "*", map[string]interface{}{"apiKey": "nk", "baseUrl": f.srv.URL + "/api/v1"})
+	h := newHarness(t, &Options{Credentials: creds, PollState: &memPollState{m: map[string]string{}}, Outbound: node.OutboundPolicy{AllowedHosts: []string{"127.0.0.1"}},
+		APIBaseURLs: map[string]string{"dhl": f.srv.URL}})
+
+	rss := wfJSON(t, []map[string]interface{}{
+		{"name": "Feed", "type": "n8n-nodes-base.rssFeedReadTrigger", "typeVersion": 1, "parameters": map[string]interface{}{"feedUrl": f.srv.URL + "/feed.xml",
+			"pollTimes": map[string]interface{}{"item": []interface{}{map[string]interface{}{"mode": "everyX", "unit": "minutes", "value": 10}}}}},
+		nd("Out", "noOp", 1, nil),
+	}, "Feed->Out")
+	h.fixedID = "rss-wf"
+	feedItems = []string{item("old", "Mon, 02 Jan 2006 15:04:05 +0000")}
+	if _, steps := h.run(t, rss, `{"__trigger":"Feed"}`); steps["Out"].Status != "SKIPPED" {
+		t.Fatalf("first poll should only record the newest date: %+v", steps["Out"])
+	}
+	feedItems = append(feedItems, item("new", "Tue, 03 Jan 2006 15:04:05 +0000"))
+	_, steps := h.run(t, rss, `{"__trigger":"Feed"}`)
+	if got := itemsOf(t, steps["Out"], 0); len(got) != 1 || got[0]["title"] != "new" {
+		t.Fatalf("second poll: %v", got)
+	}
+	h.fixedID = ""
+
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		credNode(nd("DHL", "dhl", 1, map[string]interface{}{"trackingNumber": "JD1", "options": map[string]interface{}{}}), "dhlApi"),
+		credNode(nd("N8N", "n8n", 1, map[string]interface{}{"filters": map[string]interface{}{"tags": "mcp"}, "requestOptions": map[string]interface{}{}}), "n8nApi"),
+	}, "Start->DHL", "Start->N8N")
+	_, steps = h.run(t, data, "")
+	if got := itemsOf(t, steps["DHL"], 0); len(got) != 1 || got[0]["id"] != "JD1" {
+		t.Fatalf("dhl: %v", got)
+	}
+	if got := itemsOf(t, steps["N8N"], 0); len(got) != 2 || got[1]["id"] != "w2" {
+		t.Fatalf("n8n workflows (paginated): %v", got)
+	}
+	if r := f.find(t, "GET", "/api/v1/workflows"); !strings.Contains(r.query, "tags=mcp") {
+		t.Fatalf("n8n filter: %s", r.query)
+	}
+}

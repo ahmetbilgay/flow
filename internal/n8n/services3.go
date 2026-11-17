@@ -643,6 +643,13 @@ func rssFeedReadNode(ec *execCtx) ([][]Item, error) {
 		if err != nil {
 			return nil, err
 		}
+		return ec.readFeed(u)
+	})
+}
+
+// readFeed downloads and parses an RSS or Atom feed into items.
+func (ec *execCtx) readFeed(u string) ([]Item, error) {
+	{
 		data, _, err := ec.download(u)
 		if err != nil {
 			return nil, err
@@ -679,7 +686,7 @@ func rssFeedReadNode(ec *execCtx) ([][]Item, error) {
 			out = append(out, Item{JSON: j})
 		}
 		return out, nil
-	})
+	}
 }
 
 func stripTags(s string) string {

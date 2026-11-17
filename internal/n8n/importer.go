@@ -177,6 +177,7 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.googleDriveTrigger":          "poll",
 	"n8n-nodes-base.emailReadImap":               "poll",
 	"n8n-nodes-base.microsoftOutlookTrigger":     "poll",
+	"n8n-nodes-base.rssFeedReadTrigger":          "poll",
 	"n8n-nodes-base.twilioTrigger":               "webhook",
 }
 
