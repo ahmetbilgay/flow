@@ -55,6 +55,10 @@ type Options struct {
 	// FileSystemRoot enables the Read/Write Files nodes, confined to this
 	// directory. Empty (default) disables file access.
 	FileSystemRoot string
+	// AllowLocalProcesses lets imported workflows start local processes:
+	// Execute Command, Python Code and STDIO MCP servers. Off by default;
+	// enable only for trusted workflows on isolated workers.
+	AllowLocalProcesses bool
 }
 
 func (o *Options) exprTimeout() time.Duration {

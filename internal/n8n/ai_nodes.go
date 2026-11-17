@@ -333,6 +333,14 @@ func (ec *execCtx) toolCtx(s subNode, args map[string]interface{}) (*execCtx, er
 func (ec *execCtx) buildTools(i int) ([]aiTool, error) {
 	var tools []aiTool
 	for _, s := range aiSubNodes(ec.node.Config, "ai_tool") {
+		if short(s.typ) == "mcpClientTool" && strings.HasPrefix(s.typ, "@n8n/") {
+			ts, err := ec.mcpClientTools(s, i)
+			if err != nil {
+				return nil, err
+			}
+			tools = append(tools, ts...)
+			continue
+		}
 		t, err := ec.buildTool(s, i)
 		if err != nil {
 			return nil, err
@@ -1208,6 +1216,8 @@ func aiSubNodeSupported(typ string) bool {
 	case "outputParserStructured", "outputParserAutofixing", "outputParserItemList",
 		"toolWorkflow", "toolCode", "toolCalculator", "toolThink", "toolWikipedia", "toolSerpApi", "toolHttpRequest", "httpRequestTool":
 		return true
+	case "mcpClientTool":
+		return strings.HasPrefix(typ, "@n8n/")
 	}
 	return false
 }

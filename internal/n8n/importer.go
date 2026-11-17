@@ -178,10 +178,11 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.emailReadImap":               "poll",
 	"n8n-nodes-base.microsoftOutlookTrigger":     "poll",
 	"n8n-nodes-base.rssFeedReadTrigger":          "poll",
+	"@n8n/n8n-nodes-langchain.mcpTrigger":        "mcp",
 	"n8n-nodes-base.twilioTrigger":               "webhook",
 }
 
-var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7}
+var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7, "mcp": 8}
 
 func isTriggerType(t string) bool {
 	if _, ok := triggerKinds[t]; ok {
@@ -506,8 +507,6 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 	if !Supported(typ) {
 		if isTriggerType(typ) {
 			rep.block(n, "trigger %s is not supported (start the workflow from your app or a webhook instead)", typ)
-		} else if strings.HasPrefix(typ, "n8n-nodes-mcp.") {
-			rep.block(n, "node type %s is not supported: this community MCP client launches local processes (STDIO), which imported workflows may not do", typ)
 		} else {
 			rep.block(n, "node type %s is not supported", typ)
 		}
@@ -572,6 +571,12 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		if n.TypeVersion < 4 {
 			if _, err := sheetsLegacyParams(params, float64(n.TypeVersion)); err != nil {
 				rep.block(n, "%s", err.Error())
+			}
+		}
+	case "mcpClient", "mcpClientTool":
+		if strings.HasPrefix(n.Type, "n8n-nodes-mcp.") {
+			if ct := toString(get("connectionType")); ct == "" || ct == "cmd" {
+				rep.warn(n, "this MCP client starts a local process (STDIO); it runs only with Options.AllowLocalProcesses")
 			}
 		}
 	case "chat":

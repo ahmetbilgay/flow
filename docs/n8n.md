@@ -2,7 +2,7 @@
 
 Flow can import and run [n8n](https://n8n.io) workflow exports. Every n8n node becomes a durable engine step, so imported workflows get flow's retries, leases, concurrency and persistence while keeping n8n's data model (items, paired items, expressions).
 
-Measured on the 299 most-viewed public n8n templates, **91% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
+Measured on the 299 most-viewed public n8n templates, **94% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
 
 ## Quick start
 
@@ -88,9 +88,15 @@ Loops: Loop Over Items (v3) and any other cycle (e.g. polling: IF → Wait → H
 
 Waits longer than 65 seconds do not hold a worker: the step is stored as waiting and resumed by the engine (checked every 30 seconds, survives restarts). "Continue on error" settings keep successful items and turn each failing item into an error item, like n8n.
 
+## MCP
+
+- **MCP Server Trigger**: the tools connected to the trigger are served at `/mcp/{path}` (Streamable HTTP) and `/mcp/{path}/sse` + `/mcp/{path}/messages` (SSE). Each `tools/call` runs as an execution of the workflow. Bearer and header authentication are supported.
+- **MCP Client Tool**: lists a remote server's tools (HTTP Streamable or SSE) and gives them to the agent; connections follow the outbound policy.
+- **Community MCP Client** (`n8n-nodes-mcp`): SSE and HTTP connections work; STDIO servers start a local process and run only with `Options.AllowLocalProcesses`.
+
 ## Not supported
 
-Python Code nodes, `require()` of modules other than `crypto`/`util`, `this.helpers` methods other than httpRequest/request/prepareBinaryData/getBinaryDataBuffer/returnJsonArray, legacy binary .xls files, writing ODS/XLS, Google Drive v1/v2 list operations, MCP nodes, sub-node memory managers and community nodes. The report lists them as blocking issues.
+Python Code nodes, `require()` of modules other than `crypto`/`util`, `this.helpers` methods other than httpRequest/request/prepareBinaryData/getBinaryDataBuffer/returnJsonArray, legacy binary .xls files, writing ODS/XLS, Google Drive v1/v2 list operations, sub-node memory managers and community nodes. The report lists them as blocking issues.
 
 ## Security
 

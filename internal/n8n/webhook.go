@@ -45,6 +45,8 @@ type Handler struct {
 	mu    sync.Mutex
 	index map[string]routeTarget
 	built time.Time
+	// sessions are open MCP SSE streams.
+	sessions mcpSessions
 }
 
 type routeTarget struct {
@@ -119,6 +121,18 @@ func (h *Handler) routes(ctx context.Context, force bool) (map[string]routeTarge
 				idx["webhook POST "+id] = routeTarget{wf.ID, n, "raw"}
 			case n.Type == "@n8n/n8n-nodes-langchain.chatTrigger":
 				idx["chat "+wf.ID] = routeTarget{wf.ID, n, "chat"}
+			case n.Type == "@n8n/n8n-nodes-langchain.mcpTrigger":
+				p := nodeParams(n)
+				path := strings.Trim(toString(p["path"]), "/")
+				if path == "" {
+					path = toString(n.Config["__webhookId"])
+				}
+				if path == "" {
+					path = n.ID
+				}
+				if _, taken := idx["mcp "+path]; !taken {
+					idx["mcp "+path] = routeTarget{wf.ID, n, "mcp"}
+				}
 			case n.Type == "n8n-nodes-base.formTrigger":
 				idx["form "+wf.ID] = routeTarget{wf.ID, n, "form"}
 			}
@@ -141,6 +155,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key = "form " + rest
 	case "resume":
 		h.handleResume(w, r, rest)
+		return
+	case "mcp":
+		h.serveMCP(w, r, rest)
 		return
 	default:
 		httpError(w, http.StatusNotFound, "unknown endpoint")
@@ -192,7 +209,7 @@ func (h *Handler) authorize(r *http.Request, t routeTarget) error {
 	if auth == "" || auth == "none" {
 		return nil
 	}
-	credType := map[string]string{"basicAuth": "httpBasicAuth", "headerAuth": "httpHeaderAuth"}[auth]
+	credType := map[string]string{"basicAuth": "httpBasicAuth", "headerAuth": "httpHeaderAuth", "bearerAuth": "httpBearerAuth"}[auth]
 	if credType == "" {
 		return fmt.Errorf("unsupported webhook authentication %q", auth)
 	}
@@ -213,6 +230,11 @@ func (h *Handler) authorize(r *http.Request, t routeTarget) error {
 		}
 	case "httpHeaderAuth":
 		if !eq(r.Header.Get(credString(c, "name")), credString(c, "value")) || credString(c, "value") == "" {
+			return errors.New("bad credentials")
+		}
+	case "httpBearerAuth":
+		tok := credString(c, "token")
+		if tok == "" || !eq(r.Header.Get("Authorization"), "Bearer "+tok) {
 			return errors.New("bad credentials")
 		}
 	}
