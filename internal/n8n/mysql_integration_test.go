@@ -4,6 +4,7 @@ package n8n
 
 import (
 	"database/sql"
+	"fmt"
 	"net"
 	"strconv"
 	"testing"
@@ -26,7 +27,7 @@ func TestMySQLTableOperations(t *testing.T) {
 	defer raw.Close()
 	for _, q := range []string{"DROP TABLE IF EXISTS n8n_people", "CREATE TABLE n8n_people (id INT PRIMARY KEY, name VARCHAR(50), city VARCHAR(50))"} {
 		if _, err := raw.Exec(q); err != nil {
-			t.Skipf("mysql not available: %v", err)
+			integrationtest.SkipIfUnavailable(t, fmt.Errorf("mysql not available: %v", err))
 		}
 	}
 	host, portStr, _ := net.SplitHostPort(cfg.Addr)

@@ -40,6 +40,14 @@ func (ec *execCtx) resourceOp(i int, defResource, defOp string) (string, string)
 	return r, o
 }
 
+// resourceOpBy is resourceOp with a default operation per resource, as n8n
+// nodes define them.
+func (ec *execCtx) resourceOpBy(i int, defResource string, defOps map[string]string) (string, string) {
+	r, _ := ec.str(i, "resource", defResource)
+	o, _ := ec.str(i, "operation", defOps[r])
+	return r, o
+}
+
 func unsupportedOp(node, r, o string) error {
 	return permanentError{fmt.Sprintf("%s: %s/%s is not supported", node, r, o)}
 }

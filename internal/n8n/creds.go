@@ -198,6 +198,10 @@ var knownCredentialDomains = map[string][]string{
 	"microsoft": {"graph.microsoft.com"}, "discordbot": {"discord.com"}, "whatsapp": {"graph.facebook.com"}, "facebookgraph": {"graph.facebook.com"},
 	"elevenlabs": {"api.elevenlabs.io"}, "mistralcloud": {"api.mistral.ai"}, "groq": {"api.groq.com"}, "deepseek": {"api.deepseek.com"},
 	"perplexity": {"api.perplexity.ai"}, "cohere": {"api.cohere.ai", "api.cohere.com"}, "huggingface": {"huggingface.co"},
+	"reddit": {"reddit.com"}, "twilio": {"twilio.com"}, "dropbox": {"dropboxapi.com"}, "openweathermap": {"api.openweathermap.org"},
+	"urlscanio": {"urlscan.io"}, "apitemplateio": {"api.apitemplate.io"}, "uproc": {"api.uproc.com"},
+	"googletasks": {"googleapis.com"}, "googleanalytics": {"googleapis.com"}, "microsoftteams": {"graph.microsoft.com"},
+	"microsoftonedrive": {"graph.microsoft.com"}, "microsoftexcel": {"graph.microsoft.com"},
 	"stripe": {"api.stripe.com"}, "shopify": {"myshopify.com"}, "pinecone": {"pinecone.io"}, "supabase": {"supabase.co"},
 }
 

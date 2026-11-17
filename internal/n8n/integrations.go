@@ -145,12 +145,14 @@ func sanitizeErr(err error) error {
 // ---------------------------------------------------------------- Google auth
 
 var googleScopes = map[string]string{
-	"sheets":   "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file",
-	"gmail":    "https://mail.google.com/",
-	"drive":    "https://www.googleapis.com/auth/drive",
-	"calendar": "https://www.googleapis.com/auth/calendar",
-	"youtube":  "https://www.googleapis.com/auth/youtube",
-	"docs":     "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive",
+	"sheets":    "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file",
+	"gmail":     "https://mail.google.com/",
+	"drive":     "https://www.googleapis.com/auth/drive",
+	"calendar":  "https://www.googleapis.com/auth/calendar",
+	"youtube":   "https://www.googleapis.com/auth/youtube",
+	"tasks":     "https://www.googleapis.com/auth/tasks",
+	"analytics": "https://www.googleapis.com/auth/analytics.readonly",
+	"docs":      "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive",
 }
 
 type cachedToken struct {

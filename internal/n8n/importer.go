@@ -176,6 +176,8 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.googleSheetsTrigger":         "poll",
 	"n8n-nodes-base.googleDriveTrigger":          "poll",
 	"n8n-nodes-base.emailReadImap":               "poll",
+	"n8n-nodes-base.microsoftOutlookTrigger":     "poll",
+	"n8n-nodes-base.twilioTrigger":               "webhook",
 }
 
 var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7}

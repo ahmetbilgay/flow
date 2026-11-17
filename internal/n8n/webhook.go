@@ -71,6 +71,7 @@ func NewHandler(eng *engine.Engine, n8nOpts *Options, opts HandlerOptions) *Hand
 var rawBodyTriggers = map[string]bool{
 	"n8n-nodes-base.telegramTrigger": true,
 	"n8n-nodes-base.whatsAppTrigger": true,
+	"n8n-nodes-base.twilioTrigger":   true,
 }
 
 func (h *Handler) routes(ctx context.Context, force bool) (map[string]routeTarget, error) {
@@ -172,7 +173,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item := h.buildItem(r, body, target)
-	input, _ := json.Marshal(map[string]interface{}{TriggerKey: target.node.Name, "items": []interface{}{item}})
+	items := []interface{}{item}
+	if list, ok := item.([]interface{}); ok && target.kind == "raw" {
+		items = list // e.g. Twilio Event Streams post an array of events
+	}
+	input, _ := json.Marshal(map[string]interface{}{TriggerKey: target.node.Name, "items": items})
 	execID, err := h.eng.StartWorkflow(r.Context(), h.opts.Namespace, target.workflowID, string(input))
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "could not start the workflow")
