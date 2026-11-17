@@ -34,6 +34,9 @@ type (
 	N8NStaticCredentials = n8n.StaticCredentials
 	// N8NChatMemoryStore stores AI chat history for memory nodes.
 	N8NChatMemoryStore = n8n.ChatMemoryStore
+	// N8NChatMemoryReplacer is an optional extension of N8NChatMemoryStore used
+	// by the Chat Memory Manager's override and delete modes.
+	N8NChatMemoryReplacer = n8n.ChatMemoryReplacer
 	// N8NChatMessage is one stored chat turn.
 	N8NChatMessage = n8n.ChatMessage
 	// N8NItem is one n8n data item.
