@@ -221,6 +221,7 @@ func Import(data []byte, opts ImportOptions) (*models.Workflow, *Report, error) 
 		nodes = append(nodes, n)
 	}
 	rep.Nodes = len(nodes)
+	repairNodeReferences(nodes)
 
 	// Split connections into main edges and AI attachments.
 	var edges []models.Edge
@@ -659,7 +660,7 @@ func checkExpressions(n *rawNode, params map[string]interface{}, rep *Report) {
 			if strings.HasPrefix(t, "=") {
 				segs, err := splitTemplate(t[1:])
 				if err != nil {
-					rep.block(n, "invalid expression: %v", err)
+					rep.warn(n, "invalid expression (%v); this node fails when it runs, as in n8n", err)
 					return
 				}
 				for _, s := range segs {
@@ -669,10 +670,10 @@ func checkExpressions(n *rawNode, params map[string]interface{}, rep *Report) {
 					code += s.text + "\n"
 					if _, err := goja.Compile("expr", "(function(){ return (\n"+s.text+"\n); })()", false); err != nil {
 						if _, err2 := goja.Compile("expr", "(function(){\n"+s.text+"\n})()", false); err2 != nil {
-							msg := "expression syntax error: " + firstLine(err.Error())
+							msg := fmt.Sprintf("expression {{%s}} has a syntax error (%s); this node fails when it runs, as in n8n — the template probably expects a value to be filled in", shorten(s.text, 60), firstLine(err.Error()))
 							if !reported[msg] {
 								reported[msg] = true
-								rep.block(n, "%s", msg)
+								rep.warn(n, "%s", msg)
 							}
 						}
 					}
@@ -934,4 +935,60 @@ func breakCycles(wf *models.Workflow, rep *Report) {
 		kept = append(kept, e)
 	}
 	wf.Edges = kept
+}
+
+func shorten(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
+
+// repairNodeReferences escapes quotes of node names inside $('…'),
+// $("…") and $node[…] references (e.g. $('Create Sheet If It Doesn't
+// Exist')), which n8n's editor would have escaped.
+func repairNodeReferences(nodes []*rawNode) {
+	type fix struct{ from, to string }
+	var fixes []fix
+	for _, n := range nodes {
+		if !strings.ContainsAny(n.Name, `'"`) {
+			continue
+		}
+		single := strings.ReplaceAll(strings.ReplaceAll(n.Name, `\`, `\\`), `'`, `\'`)
+		double := strings.ReplaceAll(strings.ReplaceAll(n.Name, `\`, `\\`), `"`, `\"`)
+		if strings.Contains(n.Name, "'") {
+			fixes = append(fixes, fix{"$('" + n.Name + "')", "$('" + single + "')"}, fix{"$node['" + n.Name + "']", "$node['" + single + "']"})
+		}
+		if strings.Contains(n.Name, `"`) {
+			fixes = append(fixes, fix{`$("` + n.Name + `")`, `$("` + double + `")`}, fix{`$node["` + n.Name + `"]`, `$node["` + double + `"]`})
+		}
+	}
+	if len(fixes) == 0 {
+		return
+	}
+	var walk func(v interface{}) interface{}
+	walk = func(v interface{}) interface{} {
+		switch t := v.(type) {
+		case string:
+			if strings.HasPrefix(t, "=") {
+				for _, f := range fixes {
+					t = strings.ReplaceAll(t, f.from, f.to)
+				}
+			}
+			return t
+		case map[string]interface{}:
+			for k, x := range t {
+				t[k] = walk(x)
+			}
+		case []interface{}:
+			for i, x := range t {
+				t[i] = walk(x)
+			}
+		}
+		return v
+	}
+	for _, n := range nodes {
+		walk(n.Parameters)
+	}
 }

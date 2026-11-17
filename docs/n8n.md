@@ -2,7 +2,7 @@
 
 Flow can import and run [n8n](https://n8n.io) workflow exports. Every n8n node becomes a durable engine step, so imported workflows get flow's retries, leases, concurrency and persistence while keeping n8n's data model (items, paired items, expressions).
 
-Measured on the 299 most-viewed public n8n templates, **296 (99%) import as fully runnable** (every node and feature supported; credentials still have to be provided). The remaining 3 contain invalid expressions (unfilled placeholders such as `{{voice id}}`) and fail in n8n as well. Execute Command, Python Code, STDIO MCP servers and the Local File Trigger need opt-in options (see Security). The importer reports exactly what is missing or needs configuration.
+Measured on the 299 most-viewed public n8n templates, **all 299 import and run**; 297 work fully (credentials still have to be provided) and 2 contain unfilled placeholders (such as `{{voice id}}`) that make that one node fail when it runs, exactly as in n8n. The importer reports such expressions as warnings and repairs unescaped quotes in node references (`$('Doesn't Exist')`). Execute Command, Python Code, STDIO MCP servers and the Local File Trigger need opt-in options (see Security). The importer reports exactly what is missing or needs configuration.
 
 ## Quick start
 

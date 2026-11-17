@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/dgmos/flow/internal/engine"
@@ -24,7 +25,7 @@ func TestCorpus(t *testing.T) {
 		t.Skip("N8N_CORPUS_DIR not set")
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
-	total, runnable, failed, startFail := 0, 0, 0, 0
+	total, runnable, failed, startFail, exprWarn := 0, 0, 0, 0, 0
 	reasons := map[string]int{}
 	var perTemplate []map[string]bool
 	reg := engine.NewRegistry()
@@ -43,6 +44,13 @@ func TestCorpus(t *testing.T) {
 			t.Logf("import error %s: %v", filepath.Base(f), err)
 			reasons["import error: "+err.Error()]++
 			continue
+		}
+		for _, w := range rep.Warnings {
+			if strings.HasPrefix(w.Message, "expression {{") || strings.HasPrefix(w.Message, "invalid expression") {
+				exprWarn++
+				t.Logf("expression problem in %s: %s", filepath.Base(f), w.Message)
+				break
+			}
 		}
 		if rep.Runnable {
 			wf, _, _ := Import(data, ImportOptions{ID: filepath.Base(f)})
@@ -109,6 +117,7 @@ func TestCorpus(t *testing.T) {
 		t.Logf("greedy %2d: +%d  %s", step+1, bg, best)
 	}
 	t.Logf("runnable but failed to register/start: %d", startFail)
+	t.Logf("runnable with an invalid expression (fails at that node, as in n8n): %d", exprWarn)
 	t.Logf("templates: %d  runnable: %d (%.1f%%)  import errors: %d", total, runnable, 100*float64(runnable)/float64(max(total, 1)), failed)
 	type kv struct {
 		k string

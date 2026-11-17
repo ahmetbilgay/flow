@@ -372,7 +372,9 @@ func TestImportReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Runnable || len(rep.Blocking) != 2 || rep.Supported != 1 {
+	// The unknown node blocks; the broken expression is a warning (it fails
+	// only when its node runs, as in n8n).
+	if rep.Runnable || len(rep.Blocking) != 1 || rep.Supported != 2 || len(rep.Warnings) != 1 || !strings.Contains(rep.Warnings[0].Message, "$json.a +") {
 		t.Fatalf("report: %+v", rep)
 	}
 	if len(rep.Credentials) != 1 || rep.Credentials[0].Type != "acmeCrmOAuth2Api" {

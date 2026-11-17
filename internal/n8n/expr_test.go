@@ -172,3 +172,31 @@ func TestRecursionFailsFast(t *testing.T) {
 		t.Fatalf("normal recursion broken: %v %v", v, err)
 	}
 }
+
+// A $('…') reference to a node whose name contains a quote is repaired at
+// import; an expression with an unfilled placeholder is a warning, not a
+// blocker, and fails only when its node runs (as in n8n).
+func TestNodeReferenceRepairAndExpressionWarnings(t *testing.T) {
+	h := newHarness(t, nil)
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		nd("Create Sheet If It Doesn't Exist", "set", 3.4, map[string]interface{}{"mode": "raw", "jsonOutput": `{"title":"Sheet A"}`}),
+		nd("Use", "set", 3.4, map[string]interface{}{"assignments": map[string]interface{}{"assignments": []interface{}{
+			assign("t", "string", "={{ $('Create Sheet If It Doesn't Exist').item.json.title }}")}}}),
+	}, "Start->Create Sheet If It Doesn't Exist", "Create Sheet If It Doesn't Exist->Use")
+	_, rep, _ := Import(data, ImportOptions{})
+	if !rep.Runnable || len(rep.Warnings) != 0 {
+		t.Fatalf("quoted node name should be repaired: %+v %+v", rep.Blocking, rep.Warnings)
+	}
+	_, steps := h.run(t, data, "")
+	if got := itemsOf(t, steps["Use"], 0); len(got) != 1 || got[0]["t"] != "Sheet A" {
+		t.Fatalf("repaired reference: %v (%s)", got, steps["Use"].Error)
+	}
+
+	bad := wfJSON(t, []map[string]interface{}{nd("Start", "manualTrigger", 1, nil),
+		nd("HTTP", "httpRequest", 4.2, map[string]interface{}{"url": "=https://api.example.com/v1/{{voice id}}"})}, "Start->HTTP")
+	_, rep, _ = Import(bad, ImportOptions{})
+	if !rep.Runnable || len(rep.Warnings) == 0 || !strings.Contains(rep.Warnings[0].Message, "voice id") {
+		t.Fatalf("placeholder expression should be a warning naming the expression: %+v %+v", rep.Blocking, rep.Warnings)
+	}
+}
