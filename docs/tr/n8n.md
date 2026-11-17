@@ -2,7 +2,7 @@
 
 Flow, [n8n](https://n8n.io) workflow export'larını içe aktarıp çalıştırabilir. Her n8n node'u kalıcı bir engine adımına dönüşür. Böylece içe aktarılan workflow'lar n8n'in veri modelini (item'lar, paired item'lar, ifadeler) korurken flow'un retry, lease, eşzamanlılık ve kalıcılık özelliklerinden yararlanır.
 
-En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%88'i tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
+En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%91'i tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
 
 ## Hızlı başlangıç
 

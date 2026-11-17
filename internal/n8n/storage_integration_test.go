@@ -4,6 +4,7 @@ package n8n
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -86,5 +87,67 @@ func TestMongoDBOperations(t *testing.T) {
 	// Find runs once per input item (2), each returning Ada.
 	if len(got) != 2 || got[0]["city"] != "London" || len(toString(got[0]["_id"])) != 24 {
 		t.Fatalf("find: %v", got)
+	}
+}
+
+// PGVector against PostgreSQL with the pgvector extension (FLOW_PGVECTOR_DSN).
+func TestPGVectorStore(t *testing.T) {
+	dsn := os.Getenv("FLOW_PGVECTOR_DSN")
+	if dsn == "" {
+		t.Skip("FLOW_PGVECTOR_DSN not set (PostgreSQL with pgvector)")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass, _ := u.User.Password()
+	srv, _ := aiFake(t)
+	creds := NewStaticCredentials()
+	creds.Set("postgres", "*", map[string]interface{}{"host": u.Hostname(), "port": u.Port(), "user": u.User.Username(), "password": pass, "database": strings.TrimPrefix(u.Path, "/")})
+	creds.Set("openAiApi", "*", map[string]interface{}{"apiKey": "k", "url": srv.URL})
+	h := newHarness(t, &Options{Credentials: creds, Outbound: node.OutboundPolicy{AllowedHosts: []string{"127.0.0.1", u.Hostname()}}})
+	table := "n8n_vec_" + strings.ReplaceAll(integrationtest.UniqueID()[:8], "-", "")
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		nd("Docs", "code", 2, map[string]interface{}{"jsCode": "return [{json:{text:'the cat sat on the mat'}},{json:{text:'pasta recipe'}}];"}),
+		withCred(lc("Insert", "vectorStorePGVector", 1, map[string]interface{}{"mode": "insert", "tableName": table}), "postgres"),
+		lc("Loader", "documentDefaultDataLoader", 1, map[string]interface{}{"jsonMode": "expressionData", "jsonData": "={{ $json.text }}"}),
+		withCred(lc("Emb1", "embeddingsOpenAi", 1.2, nil), "openAiApi"),
+		withCred(lc("Find", "vectorStorePGVector", 1, map[string]interface{}{"mode": "load", "tableName": table, "prompt": "cat on a mat", "topK": 1}), "postgres"),
+		withCred(lc("Emb2", "embeddingsOpenAi", 1.2, nil), "openAiApi"),
+	}, "Start->Docs", "Docs->Insert", "Loader~ai_document->Insert", "Emb1~ai_embedding->Insert", "Insert->Find", "Emb2~ai_embedding->Find")
+	_, steps := h.run(t, data, "")
+	if steps["Insert"].Status != "COMPLETED" {
+		integrationtest.SkipIfUnavailable(t, fmt.Errorf("pgvector: %s", steps["Insert"].Error))
+	}
+	got := itemsOf(t, steps["Find"], 0)
+	if len(got) == 0 || asMap(got[0]["document"])["pageContent"] != "the cat sat on the mat" {
+		t.Fatalf("pgvector search: %v", got)
+	}
+}
+
+// MongoDB Atlas vector store: insert works on any MongoDB; $vectorSearch
+// needs Atlas, so only the insert path is checked here.
+func TestMongoAtlasInsert(t *testing.T) {
+	srv, _ := aiFake(t)
+	creds := NewStaticCredentials()
+	creds.Set("mongoDb", "*", map[string]interface{}{"configurationType": "connectionString", "connectionString": envOr("FLOW_MONGO_URI", "mongodb://127.0.0.1:27017/flow_n8n_test"), "database": "flow_n8n_test"})
+	creds.Set("openAiApi", "*", map[string]interface{}{"apiKey": "k", "url": srv.URL})
+	h := newHarness(t, &Options{Credentials: creds, Outbound: node.OutboundPolicy{AllowedHosts: []string{"127.0.0.1", "localhost", "mongo"}}})
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		nd("Docs", "code", 2, map[string]interface{}{"jsCode": "return [{json:{text:'hello atlas'}}];"}),
+		withCred(lc("Insert", "vectorStoreMongoDBAtlas", 1, map[string]interface{}{"mode": "insert", "mongoCollection": map[string]interface{}{"__rl": true, "mode": "id", "value": "vecs"}, "vectorIndexName": "idx"}), "mongoDb"),
+		lc("Loader", "documentDefaultDataLoader", 1, map[string]interface{}{"jsonMode": "expressionData", "jsonData": "={{ $json.text }}"}),
+		withCred(lc("Emb", "embeddingsOpenAi", 1.2, nil), "openAiApi"),
+		credNode(nd("Check", "mongoDb", 1.2, map[string]interface{}{"collection": "vecs", "query": `{"text":"hello atlas"}`, "options": map[string]interface{}{}}), "mongoDb"),
+	}, "Start->Docs", "Docs->Insert", "Loader~ai_document->Insert", "Emb~ai_embedding->Insert", "Insert->Check")
+	_, steps := h.run(t, data, "")
+	if steps["Insert"].Status != "COMPLETED" {
+		integrationtest.SkipIfUnavailable(t, fmt.Errorf("mongodb: %s", steps["Insert"].Error))
+	}
+	got := itemsOf(t, steps["Check"], 0)
+	if len(got) == 0 || len(asList(got[0]["embedding"])) == 0 {
+		t.Fatalf("atlas insert: %v", got)
 	}
 }

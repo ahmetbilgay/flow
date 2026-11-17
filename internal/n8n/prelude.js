@@ -514,6 +514,7 @@
     if (r.binary !== undefined) r.body = new Buf(r.binary);
     return opts.returnFullResponse || opts.resolveWithFullResponse ? { body: r.body, headers: r.headers, statusCode: r.statusCode, statusMessage: r.statusMessage } : r.body;
   }
+  g.__httpSync = httpRequest;
   g.helpers = {
     httpRequest: promised(httpRequest),
     request: promised(function (opts) { if (opts && typeof opts === 'object' && opts.json === undefined) opts = Object.assign({ json: false }, opts); return httpRequest(opts); }),

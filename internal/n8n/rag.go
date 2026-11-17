@@ -621,6 +621,14 @@ func (ec *execCtx) openStore(typ string, cfg map[string]interface{}, p map[strin
 		opts, _ := p["options"].(map[string]interface{})
 		return &supabaseStore{ec: ec, base: credBaseURL(c, ""), headers: map[string]string{"apikey": key, "Authorization": "Bearer " + key},
 			table: rlValue(p["tableName"]), queryName: firstNonEmpty(toString(opts["queryName"]), "match_documents")}, nil
+	case "vectorStorePGVector":
+		c, err := ec.subCredential(tmp, "postgres")
+		if err != nil {
+			return nil, err
+		}
+		return ec.openPGVector(c, p)
+	case "vectorStoreMongoDBAtlas":
+		return ec.openMongoAtlas(tmp, p)
 	}
 	return nil, permanentError{fmt.Sprintf("vector store %s is not supported", typ)}
 }
@@ -721,6 +729,9 @@ func vectorStoreNode(ec *execCtx) ([][]Item, error) {
 				return nil, err
 			}
 			docs, err := store.search(ec.ctx, vecs[0], int(k))
+			if err == nil {
+				docs, err = ec.rerank(ec.node.Config, prompt, docs, i)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -773,7 +784,11 @@ func (ec *execCtx) searchStore(s subNode, p map[string]interface{}, query string
 	if err != nil {
 		return nil, err
 	}
-	return store.search(ec.ctx, vecs[0], k)
+	docs, err := store.search(ec.ctx, vecs[0], k)
+	if err != nil {
+		return nil, err
+	}
+	return ec.rerank(s.config, query, docs, i)
 }
 
 func docsContext(docs []scoredDoc) string {
@@ -888,7 +903,8 @@ func firstNonNil(a, b interface{}) interface{} {
 	return b
 }
 
-var vectorStoreTypes = map[string]bool{"vectorStoreInMemory": true, "vectorStoreQdrant": true, "vectorStorePinecone": true, "vectorStoreSupabase": true}
+var vectorStoreTypes = map[string]bool{"vectorStoreInMemory": true, "vectorStoreQdrant": true, "vectorStorePinecone": true, "vectorStoreSupabase": true,
+	"vectorStorePGVector": true, "vectorStoreMongoDBAtlas": true}
 
 func ragSubNodeSupported(typ string) bool {
 	s := short(typ)
@@ -898,7 +914,7 @@ func ragSubNodeSupported(typ string) bool {
 	switch s {
 	case "embeddingsGoogleGemini", "documentDefaultDataLoader", "documentBinaryInputLoader",
 		"textSplitterRecursiveCharacterTextSplitter", "textSplitterTokenSplitter", "textSplitterCharacterTextSplitter",
-		"retrieverVectorStore", "toolVectorStore":
+		"retrieverVectorStore", "toolVectorStore", "rerankerCohere":
 		return true
 	}
 	return vectorStoreTypes[s]

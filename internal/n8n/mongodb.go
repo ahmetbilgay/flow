@@ -42,6 +42,11 @@ func (ec *execCtx) mongo() (*mongoConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ec.mongoWith(c)
+}
+
+// mongoWith opens (or reuses) a client for a mongoDb credential.
+func (ec *execCtx) mongoWith(c map[string]interface{}) (*mongoConn, error) {
 	uri := credString(c, "connectionString")
 	db := credString(c, "database")
 	if credString(c, "configurationType") != "connectionString" || uri == "" {

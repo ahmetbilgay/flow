@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -115,6 +116,8 @@ type openAIModel struct {
 	headers map[string]string
 	model   string
 	extra   map[string]interface{}
+	// query is appended to the request URL (Azure's api-version).
+	query string
 }
 
 func (m *openAIModel) Chat(ctx context.Context, req llmRequest) (*llmResponse, error) {
@@ -156,7 +159,7 @@ func (m *openAIModel) Chat(ctx context.Context, req llmRequest) (*llmResponse, e
 		}
 		body["tools"] = tools
 	}
-	out, err := llmHTTP(ctx, m.client, m.limit, m.baseURL+"/chat/completions", m.headers, body)
+	out, err := llmHTTP(ctx, m.client, m.limit, m.baseURL+"/chat/completions"+m.query, m.headers, body)
 	if err != nil {
 		return nil, err
 	}
@@ -384,12 +387,15 @@ var openAICompatible = map[string]struct {
 	"lmChatMistralCloud":    {"mistralCloudApi", "https://api.mistral.ai/v1"},
 	"lmChatOllama":          {"ollamaApi", "http://localhost:11434"},
 	"lmChatVercelAiGateway": {"vercelAiGatewayApi", "https://ai-gateway.vercel.sh/v1"},
+	"lmOllama":              {"ollamaApi", "http://localhost:11434"},
+	// Hugging Face Inference Providers (OpenAI-compatible router).
+	"lmOpenHuggingFaceInference": {"huggingFaceApi", "https://router.huggingface.co/v1"},
 }
 
 func modelSubNodeSupported(typ string) bool {
 	s := short(typ)
 	_, ok := openAICompatible[s]
-	return ok || s == "lmChatAnthropic" || s == "lmChatGoogleGemini"
+	return ok || s == "lmChatAnthropic" || s == "lmChatGoogleGemini" || s == "lmChatAzureOpenAi"
 }
 
 // subNode is an AI sub-node folded into its root node's config.
@@ -463,7 +469,11 @@ func (ec *execCtx) buildModel(i int) (chatModel, llmRequest, error) {
 	if len(subs) == 0 {
 		return nil, llmRequest{}, permanentError{fmt.Sprintf("%s: no chat model connected", ec.node.Name)}
 	}
-	s := subs[0]
+	return ec.buildModelFor(subs[0], i)
+}
+
+// buildModelFor creates the chat model of model sub-node s for item i.
+func (ec *execCtx) buildModelFor(s subNode, i int) (chatModel, llmRequest, error) {
 	p, err := ec.resolveSub(s, i)
 	if err != nil {
 		return nil, llmRequest{}, err
@@ -497,7 +507,18 @@ func (ec *execCtx) buildModel(i int) (chatModel, llmRequest, error) {
 		if u := toString(opts["baseURL"]); u != "" {
 			baseURL = strings.TrimRight(u, "/")
 		}
-		if st == "lmChatOllama" && !strings.HasSuffix(baseURL, "/v1") {
+		if st == "lmOpenHuggingFaceInference" {
+			if u := toString(opts["endpointUrl"]); u != "" {
+				baseURL = strings.TrimRight(u, "/")
+			}
+			if model == "gpt-4o-mini" {
+				model = "meta-llama/Llama-3.1-8B-Instruct"
+			}
+		}
+		if (st == "lmChatOllama" || st == "lmOllama") && model == "gpt-4o-mini" {
+			model = "llama3.2"
+		}
+		if (st == "lmChatOllama" || st == "lmOllama") && !strings.HasSuffix(baseURL, "/v1") {
 			baseURL += "/v1"
 		}
 		headers := map[string]string{}
@@ -513,6 +534,19 @@ func (ec *execCtx) buildModel(i int) (chatModel, llmRequest, error) {
 		return &openAIModel{client: client, limit: limit, baseURL: baseURL, headers: headers, model: model, extra: extra}, base, nil
 	}
 	switch st {
+	case "lmChatAzureOpenAi":
+		c, err := ec.subCredential(s, "azureOpenAiApi")
+		if err != nil {
+			return nil, base, err
+		}
+		deployment := rlValue(p["model"])
+		endpoint := strings.TrimRight(credString(c, "endpoint"), "/")
+		if endpoint == "" {
+			endpoint = "https://" + credString(c, "resourceName") + ".openai.azure.com"
+		}
+		version := firstNonEmpty(credString(c, "apiVersion"), "2024-10-21")
+		return &openAIModel{client: client, limit: limit, baseURL: endpoint + "/openai/deployments/" + url.PathEscape(deployment),
+			headers: map[string]string{"api-key": credString(c, "apiKey")}, model: deployment, query: "?api-version=" + url.QueryEscape(version)}, base, nil
 	case "lmChatAnthropic":
 		c, err := ec.subCredential(s, "anthropicApi")
 		if err != nil {

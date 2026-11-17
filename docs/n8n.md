@@ -2,7 +2,7 @@
 
 Flow can import and run [n8n](https://n8n.io) workflow exports. Every n8n node becomes a durable engine step, so imported workflows get flow's retries, leases, concurrency and persistence while keeping n8n's data model (items, paired items, expressions).
 
-Measured on the 299 most-viewed public n8n templates, **88% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
+Measured on the 299 most-viewed public n8n templates, **91% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
 
 ## Quick start
 

@@ -288,6 +288,11 @@ func (ec *execCtx) postgresDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ec.postgresDBWith(c)
+}
+
+// postgresDBWith opens (or reuses) a pool for a postgres credential.
+func (ec *execCtx) postgresDBWith(c map[string]interface{}) (*sql.DB, error) {
 	ssl := credString(c, "ssl")
 	if ssl == "" || ssl == "allow" {
 		ssl = "prefer"

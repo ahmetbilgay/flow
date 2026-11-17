@@ -483,13 +483,13 @@ var (
 
 // codeFeatureIssues reports require() modules and this.helpers methods a
 // Code node uses that are not available.
-func codeFeatureIssues(code string) []string {
+func codeFeatureIssues(code, nodeType string) []string {
 	var out []string
 	for _, m := range requireRe.FindAllStringSubmatch(code, -1) {
 		name := m[1] + m[2] + m[3]
 		if name == "" {
 			out = append(out, "require() with a computed module name is not available")
-		} else if !codeModules[name] {
+		} else if !codeModules[name] && (nodeType != "@n8n/n8n-nodes-langchain.code" || !langchainModules[name]) {
 			out = append(out, fmt.Sprintf("require('%s') is not available (crypto and util are)", name))
 		}
 	}
@@ -597,7 +597,7 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		if toString(get("resource")) == "drive" {
 			rep.block(n, "shared drive management is not supported")
 		}
-	case "vectorStoreInMemory", "vectorStoreQdrant", "vectorStorePinecone", "vectorStoreSupabase":
+	case "vectorStoreInMemory", "vectorStoreQdrant", "vectorStorePinecone", "vectorStoreSupabase", "vectorStorePGVector", "vectorStoreMongoDBAtlas":
 		if m := toString(get("mode")); m == "update" && short(n.Type) == "vectorStoreInMemory" {
 			rep.block(n, "the in-memory vector store has no document IDs to update")
 		}
@@ -675,7 +675,7 @@ func checkExpressions(n *rawNode, params map[string]interface{}, rep *Report) {
 					rep.block(n, "%s", u.msg)
 				}
 			}
-			for _, msg := range codeFeatureIssues(code) {
+			for _, msg := range codeFeatureIssues(code, n.Type) {
 				if !reported[msg] {
 					reported[msg] = true
 					rep.block(n, "%s", msg)

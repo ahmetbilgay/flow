@@ -77,7 +77,7 @@ jobs:
           --health-retries=10
 
       postgres:
-        image: postgres:15
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_PASSWORD: root
           POSTGRES_DB: dgmos_flow
@@ -124,6 +124,7 @@ jobs:
           FLOW_INTEGRATION_REQUIRED: "1"
           FLOW_S3_ENDPOINT: http://127.0.0.1:9000
           FLOW_MONGO_URI: mongodb://127.0.0.1:27017/flow_n8n_test
+          FLOW_PGVECTOR_DSN: postgres://postgres:root@127.0.0.1:5432/dgmos_flow
           FLOW_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/dgmos_flow?parseTime=true
           FLOW_POSTGRES_DSN: postgres://postgres:root@127.0.0.1:5432/dgmos_flow?sslmode=disable
           FLOW_REDIS_ADDR: 127.0.0.1:6379
