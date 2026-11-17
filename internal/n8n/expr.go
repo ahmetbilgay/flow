@@ -20,6 +20,7 @@ import (
 
 	"github.com/dlclark/regexp2"
 	"github.com/dop251/goja"
+	"github.com/jmespath/go-jmespath"
 
 	"github.com/dgmos/flow/internal/models"
 )
@@ -96,7 +97,7 @@ const contextSrc = `(function (g) {
   g.$today = g.$now.startOf('day');
   var staticData = {};
   g.$getWorkflowStaticData = function (t) { return staticData[t] || (staticData[t] = {}); };
-  g.$jmespath = function () { throw new Error('$jmespath is not supported'); };
+  g.$jmespath = function (data, expr) { return JSON.parse(__jmespath(JSON.stringify(data === undefined ? null : data), String(expr))); };
   g.$fromAI = g.$fromai = g.$fromAi = function (key, desc, type, def) {
     var args = JSON.parse(__fromAI());
     if (args === null) throw new Error('$fromAI() can only be used in AI tool parameters');
@@ -274,6 +275,17 @@ func (r *Runtime) installHost() error {
 				return nil
 			}
 			return fmt.Sprintf(`{"port":%d,"index":%d}`, port, index)
+		},
+		"__jmespath": func(data, expr string) string {
+			var v interface{}
+			if err := json.Unmarshal([]byte(data), &v); err != nil {
+				r.throw("$jmespath: %v", err)
+			}
+			res, err := jmespath.Search(expr, v)
+			if err != nil {
+				r.throw("$jmespath: %v", err)
+			}
+			return mustJSON(res)
 		},
 		"__nodeContext": func(name string) string {
 			n, ok := r.data.nodeByName(name)

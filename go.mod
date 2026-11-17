@@ -11,6 +11,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260603125802-cfe4039cb6d7
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
+	github.com/jmespath/go-jmespath v0.4.0
 	github.com/ledongthuc/pdf v0.0.0-20250510234604-a6dfec7e9de4
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2

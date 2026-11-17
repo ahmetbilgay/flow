@@ -371,3 +371,55 @@ func TestServiceNodes(t *testing.T) {
 		t.Fatalf("facebook: %+v", fb)
 	}
 }
+
+// Google Drive v1/v2 parameters run on the v3 implementation.
+func TestGoogleDriveV1V2(t *testing.T) {
+	f := newFakeAPI(t, func(r recorded) (int, string, interface{}) {
+		switch {
+		case strings.HasSuffix(r.path, "/files/F1") && strings.Contains(r.query, "alt=media"):
+			return 200, "text/plain", "file body"
+		case strings.HasSuffix(r.path, "/files/F1"):
+			return 200, "application/json", map[string]interface{}{"id": "F1", "name": "a.txt", "mimeType": "text/plain"}
+		case strings.Contains(r.path, "/upload/drive/v3/files"):
+			return 200, "application/json", map[string]interface{}{"id": "UP", "name": "x"}
+		}
+		return 404, "application/json", map[string]interface{}{}
+	})
+	h := integrationHarness(t, f.srv.URL)
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		credNode(nd("Download", "googleDrive", 1, map[string]interface{}{"operation": "download", "fileId": "F1", "options": map[string]interface{}{}}), "googleDriveOAuth2Api"),
+		credNode(nd("Upload", "googleDrive", 2, map[string]interface{}{"name": "={{ $binary.data.fileName }}", "binaryData": true, "parents": []interface{}{"FOLDER2"}, "options": map[string]interface{}{}}), "googleDriveOAuth2Api"),
+		credNode(nd("Text", "googleDrive", 1, map[string]interface{}{"name": "note.txt", "fileContent": "plain text"}), "googleDriveOAuth2Api"),
+	}, "Start->Download", "Download->Upload", "Upload->Text")
+	_, rep, _ := Import(data, ImportOptions{})
+	if !rep.Runnable {
+		t.Fatalf("not runnable: %+v", rep.Blocking)
+	}
+	_, steps := h.run(t, data, "")
+	f.mu.Lock()
+	var uploads []recorded
+	for _, r := range f.reqs {
+		if strings.Contains(r.path, "/upload/drive/v3/files") {
+			uploads = append(uploads, r)
+		}
+	}
+	f.mu.Unlock()
+	if len(uploads) != 2 {
+		t.Fatalf("want 2 uploads, got %d", len(uploads))
+	}
+	if b := uploads[0].body; !strings.Contains(b, `"name":"a.txt"`) || !strings.Contains(b, `"parents":["FOLDER2"]`) || !strings.Contains(b, "file body") {
+		t.Fatalf("binary upload: %s", b)
+	}
+	if b := uploads[1].body; !strings.Contains(b, `"parents":["root"]`) || !strings.Contains(b, "plain text") {
+		t.Fatalf("text upload: %s", b)
+	}
+	if itemsOf(t, steps["Text"], 0)[0]["id"] != "UP" {
+		t.Fatal("upload output")
+	}
+
+	bad := wfJSON(t, []map[string]interface{}{nd("Start", "manualTrigger", 1, nil), credNode(nd("List", "googleDrive", 1, map[string]interface{}{"operation": "list"}), "googleDriveOAuth2Api")}, "Start->List")
+	if _, rep, _ := Import(bad, ImportOptions{}); rep.Runnable {
+		t.Fatal("unsupported v1 operation must be reported")
+	}
+}

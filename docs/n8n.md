@@ -2,7 +2,7 @@
 
 Flow can import and run [n8n](https://n8n.io) workflow exports. Every n8n node becomes a durable engine step, so imported workflows get flow's retries, leases, concurrency and persistence while keeping n8n's data model (items, paired items, expressions).
 
-Measured on the 299 most-viewed public n8n templates, **71% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
+Measured on the 299 most-viewed public n8n templates, **73% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
 
 ## Quick start
 
@@ -76,7 +76,7 @@ Read results with `flow.N8NOutputItems(execution.Output)`.
 
 **Flow & data:** IF, Switch, Filter, Merge (append, combine by fields / position / all, choose branch, v1 modes), Loop Over Items, Split In Batches v1/v2 (with `$node["X"].context.noItemsLeft`), Set / Edit Fields (v1–v3.4), Code (JavaScript, both modes), Function, Function Item, Split Out, Aggregate, Summarize, Limit, Sort, Remove Duplicates (incl. items seen in previous executions: keys, incremental, date; node/workflow scope), Item Lists, No Op, Wait (time, date, webhook), Stop and Error, Execute Workflow (database / inline JSON, once / each), Respond to Webhook (JSON, text, binary, redirect), Date & Time, XML, HTML (template, extract, table), HTML Extract, Markdown, Extract from File (PDF, CSV, text, JSON, HTML, base64), Convert to File (CSV, JSON, text, HTML, base64), Spreadsheet File (CSV), Compression (zip/gzip, size-limited), Read PDF, Crypto (hash, HMAC, generate), Execution Data, RSS Read, Edit Image (resize, information), Read/Write Files (sandboxed), Form (pages, completion).
 
-**Integrations:** HTTP Request (v1–v4, all auth types except Digest/OAuth1; pagination by parameter or next URL, completion by empty response, status codes or expression), Telegram, Gmail, Google Sheets, Google Drive, Google Calendar, Google Docs, Slack, Discord, WhatsApp, Notion, Airtable, WordPress, X (Twitter), LinkedIn, Microsoft Outlook, Facebook Graph API, Postgres, MySQL (execute query), Redis, Supabase, Send Email (SMTP), OpenAI (legacy and LangChain node).
+**Integrations:** HTTP Request (v1–v4, all auth types except Digest/OAuth1; pagination by parameter or next URL, completion by empty response, status codes or expression), Telegram, Gmail, Google Sheets, Google Drive (v3, and v1/v2 upload/download/copy/delete/share/folder create), Google Calendar, Google Docs, Slack, Discord, WhatsApp, Notion, Airtable, WordPress, X (Twitter), LinkedIn, Microsoft Outlook, Facebook Graph API, Postgres, MySQL (execute query), Redis, Supabase, Send Email (SMTP), OpenAI (legacy and LangChain node).
 
 **AI:** AI Agent (tools, memory, output parsers), Basic LLM Chain, Question and Answer Chain, Summarization Chain, Text Classifier, Information Extractor, Sentiment Analysis, OpenAI. Chat models: OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Groq, Mistral, xAI, Ollama. Memory: window buffer (Postgres/Redis/Mongo/… chat memories map to the configured chat memory store). Output parsers: structured, auto-fixing, item list. Tools: Call Workflow, HTTP Request, Code, Calculator, Think, Wikipedia, SerpAPI, vector store tools, and **any supported integration as a tool** (`gmailTool`, `googleSheetsTool`, `telegramTool`, … with `$fromAI()`).
 
@@ -90,7 +90,7 @@ Waits longer than 65 seconds do not hold a worker: the step is stored as waiting
 
 ## Not supported
 
-Python Code nodes, `require()` / `this.helpers` in Code, `$jmespath`, XLS/XLSX/ODS files, MCP nodes, sub-node memory managers and community nodes. The report lists them as blocking issues.
+Python Code nodes, `require()` / `this.helpers` in Code, XLS/XLSX/ODS files, Google Drive v1/v2 list operations, MCP nodes, sub-node memory managers and community nodes. The report lists them as blocking issues.
 
 ## Security
 

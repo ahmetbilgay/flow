@@ -90,6 +90,9 @@ func TestExpressions(t *testing.T) {
 		{`={{ "a'b".replace(/'/g, '') }}`, "ab"},
 		{`=x{{ "a}b'".replace(/[}']/g, '') }}y{{ 1 + 1 }}`, "xaby2"},
 		{`={{ 10 / 2 / 5 }}`, 1.0},
+		{"={{ $jmespath($input.all(), '[].json.y').join(',') }}", "b,a"},
+		{"={{ $jmespath({a: {b: [1, 2]}}, 'a.b[1]') }}", 2.0},
+		{"={{ $jmespath($json, 'missing') }}", nil},
 	}
 	for _, c := range cases {
 		rt.setItem(0)

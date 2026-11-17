@@ -26,7 +26,13 @@ var googleExportDefaults = map[string]struct{ key, def string }{
 
 func googleDriveNode(ec *execCtx) ([][]Item, error) {
 	if ec.version < 3 {
-		return nil, permanentError{"Google Drive node v1-v2 is not supported; re-import with v3"}
+		params, err := driveV2Params(ec.params)
+		if err != nil {
+			return nil, err
+		}
+		v3 := *ec
+		v3.params, v3.version = params, 3
+		ec = &v3
 	}
 	h, err := ec.googleAuth("drive", "googleDriveOAuth2Api")
 	if err != nil {
@@ -48,6 +54,62 @@ func googleDriveNode(ec *execCtx) ([][]Item, error) {
 		}
 	}
 	return [][]Item{out}, nil
+}
+
+// driveV2Ops maps Google Drive v1/v2 operations to their v3 names.
+var driveV2Ops = map[string]string{
+	"file.upload": "upload", "file.download": "download", "file.delete": "deleteFile", "file.copy": "copy",
+	"file.share": "share", "folder.create": "create", "folder.delete": "deleteFolder", "folder.share": "share",
+}
+
+// driveV2Params rewrites Google Drive v1/v2 parameters into the v3 layout.
+func driveV2Params(p map[string]interface{}) (map[string]interface{}, error) {
+	resource := toString(p["resource"])
+	if resource == "" {
+		resource = "file"
+	}
+	op := toString(p["operation"])
+	if op == "" {
+		op = map[string]string{"file": "upload", "folder": "create"}[resource]
+	}
+	v3op, ok := driveV2Ops[resource+"."+op]
+	if !ok {
+		return nil, permanentError{fmt.Sprintf("Google Drive v1/v2 operation %s/%s is not supported (v3 is)", resource, op)}
+	}
+	out := map[string]interface{}{}
+	for k, v := range p {
+		out[k] = v
+	}
+	out["resource"], out["operation"] = resource, v3op
+	opts := asMap(p["options"])
+	firstParent := func(v interface{}) {
+		if l := asList(v); len(l) > 0 && toString(l[0]) != "" {
+			out["folderId"] = l[0]
+		}
+	}
+	switch resource + "." + v3op {
+	case "file.upload":
+		firstParent(p["parents"])
+		if toBool(p["binaryData"]) {
+			prop := toString(p["binaryPropertyName"])
+			if prop == "" {
+				prop = "data"
+			}
+			out["inputDataFieldName"] = prop
+		} else {
+			out["operation"], out["content"] = "createFromText", p["fileContent"]
+		}
+	case "file.copy":
+		if n, ok := opts["name"]; ok {
+			out["name"] = n
+		}
+		firstParent(opts["parents"])
+	case "folder.create":
+		firstParent(opts["parents"])
+	case "folder.deleteFolder", "folder.share":
+		out["folderNoRootId"] = p["fileId"]
+	}
+	return out, nil
 }
 
 func (d *driveAPI) call(method, u string, body interface{}) (map[string]interface{}, error) {

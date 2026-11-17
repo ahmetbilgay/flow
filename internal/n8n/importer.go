@@ -466,7 +466,6 @@ var unsupportedExpr = []struct {
 	re  *regexp.Regexp
 	msg string
 }{
-	{regexp.MustCompile(`\$jmespath\b`), "$jmespath is not supported"},
 	{regexp.MustCompile(`this\.helpers\b`), "this.helpers (HTTP from Code) is not supported"},
 	{regexp.MustCompile(`\brequire\s*\(`), "require() is not available"},
 	{regexp.MustCompile(`\$secrets\b`), "$secrets is not supported"},
@@ -543,7 +542,9 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 	case "googleDrive":
 		if n.TypeVersion < 3 {
-			rep.block(n, "Google Drive v%v is not supported (v3 is)", n.TypeVersion)
+			if _, err := driveV2Params(params); err != nil {
+				rep.block(n, "%s", err.Error())
+			}
 		}
 		if toString(get("resource")) == "drive" {
 			rep.block(n, "shared drive management is not supported")
