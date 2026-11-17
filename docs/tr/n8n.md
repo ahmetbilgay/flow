@@ -90,4 +90,4 @@ Tam liste için [İngilizce dokümana](../n8n.md) bakın.
 
 Credential'larınızı vault'tan çözmek için `flow.N8NCredentialProvider` arayüzünü uygulayın. OAuth2 credential'ları geçerli bir `accessToken` döndürmelidir; token yenileme provider'ın işidir. Google service account'ları otomatik olarak token'a çevrilir.
 
-Birden fazla instance ile çalışırken `ChatMemory` ve `PollState` için kalıcı implementasyonlar sağlayın.
+Birden fazla instance ile çalışırken `ChatMemory` ve `PollState` için kalıcı implementasyonlar sağlayın. `PollState` implementasyonunuz `N8NPollStateSwapper` (`CompareAndSwapPollState`) arayüzünü de sağlarsa cursor'lar atomik ilerler ve çakışan poll'ler aynı item'ları iki kez üretmez; aksi halde poll'ler yalnızca aynı süreç içinde sıraya alınır.

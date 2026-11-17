@@ -42,6 +42,9 @@ type (
 	N8NHandlerOptions = n8n.HandlerOptions
 	// N8NPollStateStore persists polling trigger cursors.
 	N8NPollStateStore = n8n.PollStateStore
+	// N8NPollStateSwapper is an optional extension of N8NPollStateStore that
+	// advances cursors atomically so overlapping polls never emit duplicates.
+	N8NPollStateSwapper = n8n.PollStateSwapper
 )
 
 // NewN8NStaticCredentials returns an empty in-memory credential store.

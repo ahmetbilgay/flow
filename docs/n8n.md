@@ -128,7 +128,7 @@ OAuth2 credentials (Google, Slack, Microsoft, X, LinkedIn, …) must return a va
 | `Timezone` | host zone | Default zone for `$now` / `DateTime` when the workflow has none |
 | `APIBaseURLs` | official APIs | Route integrations through a proxy |
 
-Provide durable `ChatMemory` and `PollState` implementations when running several instances.
+Provide durable `ChatMemory` and `PollState` implementations when running several instances. If your `PollState` also implements `N8NPollStateSwapper` (`CompareAndSwapPollState`), cursors advance atomically and overlapping polls never emit the same items twice; otherwise polls are only serialized within one process.
 
 ## Measuring compatibility
 

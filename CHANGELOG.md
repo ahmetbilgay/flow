@@ -17,6 +17,8 @@ read the [Upgrade guide](#upgrade-guide) first.
 - Compatibility report per workflow (blocking issues, warnings, credentials, triggers) and a corpus benchmark (`-tags n8ncorpus`): 67% of the 299 most-viewed public templates import as fully runnable.
 - All outbound traffic of n8n nodes (HTTP, AI providers, SMTP, databases) is subject to the SSRF policy; `$env` and file access are opt-in.
 - Hardening for untrusted workflows: credentials are bound to their service domains (`allowedDomains`), JavaScript runs cannot hang a worker (abandoned runs, regex match timeouts, recursion limit), approval links sign the answer and require a POST confirmation, resume links are node-scoped, Respond to Webhook cannot set cookies/HSTS, webhook paths cannot be hijacked by another workflow, email headers cannot be injected, credential headers are dropped on cross-host redirects, secrets are redacted from errors, IPv6 transition ranges (NAT64/6to4/Teredo) are blocked, file sandbox refuses symlinks, connection pools are bounded and keyed by credentials, the in-memory vector store is per namespace.
+- Polling triggers: overlapping polls of the same trigger are serialized, and stores implementing `N8NPollStateSwapper` advance cursors with compare-and-swap so polls on several instances never emit duplicates.
+- `DateTime.diff` in months/quarters/years now follows Luxon's calendar arithmetic; quotes and braces inside regex literals no longer break `{{ }}` template splitting.
 
 ### Engine
 

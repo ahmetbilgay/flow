@@ -563,6 +563,10 @@ func exprEnd(s string, from int) (int, error) {
 		switch c {
 		case '\'', '"', '`':
 			quote = c
+		case '/':
+			if j, ok := regexLiteralEnd(s, from, i); ok {
+				i = j
+			}
 		case '{':
 			depth++
 		case '}':
@@ -574,11 +578,58 @@ func exprEnd(s string, from int) (int, error) {
 			}
 		}
 	}
-	// Unbalanced: fall back to the last "}}".
-	if j := strings.LastIndex(s[from:], "}}"); j >= 0 {
+	// Unbalanced (e.g. a quote we misread): fall back to the next "}}", which
+	// is how n8n itself splits templates.
+	if j := strings.Index(s[from:], "}}"); j >= 0 {
 		return from + j, nil
 	}
 	return 0, errors.New("unterminated expression: missing }}")
+}
+
+// regexLiteralEnd reports whether the '/' at s[i] starts a JS regex literal
+// (judged by the previous significant character, as JS tokenizers do) and,
+// if so, returns the index of its closing '/'. Quotes and braces inside a
+// regex such as /['"{]/g must not be treated as code.
+func regexLiteralEnd(s string, from, i int) (int, bool) {
+	p := i - 1
+	for p >= from && (s[p] == ' ' || s[p] == '\t' || s[p] == '\n' || s[p] == '\r') {
+		p--
+	}
+	if p >= from {
+		prev := s[p]
+		isIdent := prev == '_' || prev == '$' || prev == ')' || prev == ']' ||
+			(prev >= '0' && prev <= '9') || (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z')
+		if isIdent {
+			// Division, unless the identifier is a keyword that precedes an expression.
+			k := p
+			for k >= from && (s[k] == '_' || s[k] == '$' || (s[k] >= 'a' && s[k] <= 'z') || (s[k] >= 'A' && s[k] <= 'Z')) {
+				k--
+			}
+			switch s[k+1 : p+1] {
+			case "return", "typeof", "in", "of", "case", "void", "delete", "instanceof", "new":
+			default:
+				return 0, false
+			}
+		}
+	}
+	inClass := false
+	for j := i + 1; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '\n':
+			return 0, false
+		case '[':
+			inClass = true
+		case ']':
+			inClass = false
+		case '/':
+			if !inClass {
+				return j, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (r *Runtime) resolveTemplate(body string) (interface{}, error) {

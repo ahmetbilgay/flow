@@ -278,6 +278,18 @@
     var ms = (o.hour || 0) * MS.hour + (o.minute || 0) * MS.minute + (o.second || 0) * MS.second + (o.millisecond || 0);
     return new DT(base.ts + ms, dt.zoneName);
   }
+  // calDiff returns the calendar difference a-b in units of `step` months,
+  // like Luxon: whole units by calendar arithmetic (with end-of-month
+  // clamping), plus the elapsed fraction of the following unit.
+  function calDiff(a, b, step) {
+    if (a.ts < b.ts) return -calDiff(b, a, step);
+    b = new DT(b.ts, a.zoneName);
+    var whole = Math.floor(((a.year - b.year) * 12 + (a.month - b.month)) / step);
+    var cur = addDur(b, { month: whole * step }, 1);
+    while (whole > 0 && cur.ts > a.ts) { whole--; cur = addDur(b, { month: whole * step }, 1); }
+    var next = addDur(b, { month: (whole + 1) * step }, 1);
+    return whole + (a.ts - cur.ts) / (next.ts - cur.ts);
+  }
   P.plus = function (dur, unit) { return addDur(this, dur, 1, unit); };
   P.minus = function (dur, unit) { return addDur(this, dur, -1, unit); };
   P.startOf = function (unit) {
@@ -320,8 +332,7 @@
     units.forEach(function (u) {
       var n = normUnit(u), v;
       if (n === 'month' || n === 'year' || n === 'quarter') {
-        var months = (a.year - b.year) * 12 + (a.month - b.month) + (a.day - b.day) / 31;
-        v = n === 'year' ? months / 12 : n === 'quarter' ? months / 3 : months;
+        v = calDiff(a, b, n === 'year' ? 12 : n === 'quarter' ? 3 : 1);
       } else v = ms / MS[n];
       res.values[n + 's'] = v; res[n + 's'] = v;
     });

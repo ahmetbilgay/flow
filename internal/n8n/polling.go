@@ -44,6 +44,74 @@ func (s *memPollState) SetPollState(_ context.Context, key, value string) error 
 	return nil
 }
 
+// PollStateSwapper is an optional extension of PollStateStore. When the
+// store implements it, cursors are advanced with compare-and-swap so two
+// overlapping polls (frequent schedules, several instances) never emit the
+// same items twice: the poll that loses the swap emits nothing, and its
+// window is picked up by the next poll. Without it, polls are only
+// serialized within one process.
+type PollStateSwapper interface {
+	// CompareAndSwapPollState sets key to value only if its current value is
+	// old (or, when oldExists is false, only if key is absent).
+	CompareAndSwapPollState(ctx context.Context, key, old string, oldExists bool, value string) (bool, error)
+}
+
+func (s *memPollState) CompareAndSwapPollState(_ context.Context, key, old string, oldExists bool, value string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, ok := s.m[key]
+	if ok != oldExists || (ok && cur != old) {
+		return false, nil
+	}
+	s.m[key] = value
+	return true, nil
+}
+
+var pollLocks sync.Map // poll key -> *sync.Mutex
+
+// pollCursor is one poll's view of its trigger's cursor. Polls of the same
+// trigger are serialized in-process for the cursor's lifetime.
+type pollCursor struct {
+	ec     *execCtx
+	store  PollStateStore
+	key    string
+	prev   string
+	seen   bool
+	unlock func()
+}
+
+func (ec *execCtx) openPoll() (*pollCursor, error) {
+	key := ec.pollKey()
+	m, _ := pollLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	store := ec.pollStore()
+	prev, seen, err := store.GetPollState(ec.ctx, key)
+	if err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+	return &pollCursor{ec: ec, store: store, key: key, prev: prev, seen: seen, unlock: mu.Unlock}, nil
+}
+
+func (p *pollCursor) close() { p.unlock() }
+
+// commit advances the cursor to next and returns out as the trigger's
+// output, or no items if a concurrent poll already advanced the cursor.
+func (p *pollCursor) commit(next string, out []Item) ([][]Item, error) {
+	if sw, ok := p.store.(PollStateSwapper); ok {
+		won, err := sw.CompareAndSwapPollState(p.ec.ctx, p.key, p.prev, p.seen, next)
+		if err != nil {
+			return nil, err
+		}
+		if !won {
+			return [][]Item{nil}, nil
+		}
+		return [][]Item{out}, nil
+	}
+	return [][]Item{out}, p.store.SetPollState(p.ec.ctx, p.key, next)
+}
+
 func (ec *execCtx) pollStore() PollStateStore {
 	if ec.opts != nil && ec.opts.PollState != nil {
 		return ec.opts.PollState
@@ -99,14 +167,15 @@ func gmailTriggerNode(ec *execCtx) ([][]Item, error) {
 		return nil, err
 	}
 	g := &gmailAPI{ec: ec, base: ec.apiBase("gmail", "https://gmail.googleapis.com") + "/gmail/v1/users/me", headers: h}
-	store, key := ec.pollStore(), ec.pollKey()
-	last, seen, err := store.GetPollState(ec.ctx, key)
+	pc, err := ec.openPoll()
 	if err != nil {
 		return nil, err
 	}
+	defer pc.close()
+	last, seen := pc.prev, pc.seen
 	now := time.Now()
 	if !seen {
-		return [][]Item{nil}, store.SetPollState(ec.ctx, key, strconv.FormatInt(now.Unix(), 10))
+		return pc.commit(strconv.FormatInt(now.Unix(), 10), nil)
 	}
 	q := g.query(0)
 	extra := "after:" + last
@@ -127,7 +196,7 @@ func gmailTriggerNode(ec *execCtx) ([][]Item, error) {
 		}
 		out = append(out, it)
 	}
-	return [][]Item{out}, store.SetPollState(ec.ctx, key, strconv.FormatInt(now.Unix(), 10))
+	return pc.commit(strconv.FormatInt(now.Unix(), 10), out)
 }
 
 // googleSheetsTriggerNode emits added and/or updated rows since last poll.
@@ -151,14 +220,15 @@ func googleSheetsTriggerNode(ec *execCtx) ([][]Item, error) {
 		sum := sha1.Sum([]byte(mustJSON(rows[r])))
 		hashes[strconv.Itoa(r+1)] = hex.EncodeToString(sum[:])
 	}
-	store, key := ec.pollStore(), ec.pollKey()
-	prevRaw, seen, err := store.GetPollState(ec.ctx, key)
+	pc, err := ec.openPoll()
 	if err != nil {
 		return nil, err
 	}
+	defer pc.close()
+	prevRaw, seen := pc.prev, pc.seen
 	state, _ := json.Marshal(hashes)
 	if !seen {
-		return [][]Item{nil}, store.SetPollState(ec.ctx, key, string(state))
+		return pc.commit(string(state), nil)
 	}
 	var prev map[string]string
 	_ = json.Unmarshal([]byte(prevRaw), &prev)
@@ -180,7 +250,7 @@ func googleSheetsTriggerNode(ec *execCtx) ([][]Item, error) {
 	for _, n := range nums {
 		out = append(out, Item{JSON: rowObject(header, rows[n-1], n)})
 	}
-	return [][]Item{out}, store.SetPollState(ec.ctx, key, string(state))
+	return pc.commit(string(state), out)
 }
 
 // googleDriveTriggerNode emits files created/updated since the last poll.
@@ -189,14 +259,15 @@ func googleDriveTriggerNode(ec *execCtx) ([][]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, key := ec.pollStore(), ec.pollKey()
-	last, seen, err := store.GetPollState(ec.ctx, key)
+	pc, err := ec.openPoll()
 	if err != nil {
 		return nil, err
 	}
+	defer pc.close()
+	last, seen := pc.prev, pc.seen
 	now := time.Now().UTC().Format(time.RFC3339)
 	if !seen {
-		return [][]Item{nil}, store.SetPollState(ec.ctx, key, now)
+		return pc.commit(now, nil)
 	}
 	event, _ := ec.str(0, "event", "fileCreated")
 	field := "createdTime"
@@ -218,7 +289,7 @@ func googleDriveTriggerNode(ec *execCtx) ([][]Item, error) {
 		if toString(res["modifiedTime"]) > last {
 			out = append(out, Item{JSON: res})
 		}
-		return [][]Item{out}, store.SetPollState(ec.ctx, key, now)
+		return pc.commit(now, out)
 	}
 	if event == "folderCreated" || event == "folderUpdated" {
 		q = append(q, "mimeType = 'application/vnd.google-apps.folder'")
@@ -235,7 +306,7 @@ func googleDriveTriggerNode(ec *execCtx) ([][]Item, error) {
 		m, _ := f.(map[string]interface{})
 		out = append(out, Item{JSON: m})
 	}
-	return [][]Item{out}, store.SetPollState(ec.ctx, key, now)
+	return pc.commit(now, out)
 }
 
 func joinAnd(q []string) string {

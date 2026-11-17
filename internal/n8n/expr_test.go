@@ -80,6 +80,16 @@ func TestExpressions(t *testing.T) {
 		{"={{ $now.minus({days: 1}) < $now }}", true},
 		{"={{ $today.hour }}", 0.0},
 		{"={{ JSON.stringify(DateTime.fromMillis(0, {zone:'UTC'})) }}", `"1970-01-01T00:00:00.000Z"`},
+		// Calendar month/year diffs (Luxon semantics, end-of-month clamping).
+		{"={{ DateTime.fromISO('2024-02-29', {zone:'UTC'}).diff(DateTime.fromISO('2024-01-31', {zone:'UTC'}), 'months').months }}", 1.0},
+		{"={{ DateTime.fromISO('2024-03-15', {zone:'UTC'}).diff(DateTime.fromISO('2024-01-15', {zone:'UTC'}), 'months').months }}", 2.0},
+		{"={{ DateTime.fromISO('2024-01-16T12:00:00', {zone:'UTC'}).diff(DateTime.fromISO('2024-01-01', {zone:'UTC'}), 'months').months }}", 0.5},
+		{"={{ DateTime.fromISO('2024-03-15', {zone:'UTC'}).diff(DateTime.fromISO('2024-05-15', {zone:'UTC'}), 'months').months }}", -2.0},
+		{"={{ DateTime.fromISO('2026-06-01', {zone:'UTC'}).diff(DateTime.fromISO('2024-06-01', {zone:'UTC'}), 'years').years }}", 2.0},
+		// Quotes and braces inside regex literals.
+		{`={{ "a'b".replace(/'/g, '') }}`, "ab"},
+		{`=x{{ "a}b'".replace(/[}']/g, '') }}y{{ 1 + 1 }}`, "xaby2"},
+		{`={{ 10 / 2 / 5 }}`, 1.0},
 	}
 	for _, c := range cases {
 		rt.setItem(0)
