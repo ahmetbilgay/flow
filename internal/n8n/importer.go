@@ -175,6 +175,7 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.gmailTrigger":                "poll",
 	"n8n-nodes-base.googleSheetsTrigger":         "poll",
 	"n8n-nodes-base.googleDriveTrigger":          "poll",
+	"n8n-nodes-base.emailReadImap":               "poll",
 }
 
 var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7}
@@ -540,6 +541,17 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		if n.TypeVersion < 4 {
 			rep.block(n, "Google Sheets v%v is not supported (v4+ is)", n.TypeVersion)
 		}
+	case "youTube":
+		r, o := toString(get("resource")), toString(get("operation"))
+		if o == "" {
+			o = "getAll"
+		}
+		if r != "video" || !youTubeVideoOps[o] {
+			if r == "" {
+				r = "channel"
+			}
+			rep.block(n, "YouTube %s/%s is not supported (video getAll/get/update/upload/delete are)", r, o)
+		}
 	case "googleDrive":
 		if n.TypeVersion < 3 {
 			if _, err := driveV2Params(params); err != nil {
@@ -563,19 +575,21 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 			rep.block(n, "MySQL operation %q is not supported (executeQuery is)", op)
 		}
 	case "spreadsheetFile":
-		if f := toString(get("fileFormat")); f != "" && f != "csv" {
-			rep.block(n, "Spreadsheet File format %q is not supported (csv is)", f)
+		if f := toString(get("fileFormat")); toString(get("operation")) == "toFile" && f != "" && f != "csv" && f != "xlsx" {
+			rep.block(n, "writing Spreadsheet File format %q is not supported (csv and xlsx are)", f)
 		}
 	case "chainSummarization":
 		if toString(get("operationMode")) == "documentLoader" {
 			rep.block(n, "summarization with a document loader is not supported")
 		}
 	case "extractFromFile":
-		if op := toString(get("operation")); op == "xls" || op == "xlsx" || op == "ods" || op == "rtf" {
+		if op := toString(get("operation")); op == "rtf" {
 			rep.block(n, "extracting %s files is not supported", op)
+		} else if op == "xls" {
+			rep.warn(n, "legacy binary .xls files are not supported; .xlsx and .ods files are read")
 		}
 	case "convertToFile":
-		if op := toString(get("operation")); op == "xls" || op == "xlsx" || op == "ods" || op == "rtf" || op == "iCal" {
+		if op := toString(get("operation")); op == "xls" || op == "ods" || op == "rtf" || op == "iCal" {
 			rep.block(n, "converting to %s is not supported", op)
 		}
 	case "emailSend":
@@ -697,6 +711,9 @@ func triggerSpec(n *rawNode, rep *Report) TriggerSpec {
 		}
 	case "poll":
 		ts.Cron = pollTimesCron(n.Parameters)
+		if len(ts.Cron) == 0 && n.Type == "n8n-nodes-base.emailReadImap" {
+			ts.Cron = []string{imapPollCron}
+		}
 	case "schedule":
 		crons, err := scheduleCrons(n)
 		if err != nil {

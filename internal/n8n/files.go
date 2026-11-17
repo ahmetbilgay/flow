@@ -24,7 +24,7 @@ import (
 func extractFromFileNode(ec *execCtx) ([][]Item, error) {
 	op, _ := ec.str(0, "operation", "csv")
 	switch op {
-	case "xls", "xlsx", "ods", "rtf":
+	case "rtf":
 		return nil, permanentError{fmt.Sprintf("Extract from File: %s is not supported", op)}
 	}
 	var out []Item
@@ -92,6 +92,21 @@ func extractOne(ec *execCtx, i int, op string, data []byte, mt, dest string) ([]
 			}
 		}
 		return out, nil
+	case "spreadsheet": // Spreadsheet File v1 "fromFile": any sheet format or CSV
+		if sniffSheet(data) == sheetUnknown {
+			return extractOne(ec, i, "csv", data, mt, dest)
+		}
+		return extractOne(ec, i, "xlsx", data, mt, dest)
+	case "xls", "xlsx", "ods":
+		sheet, _ := ec.str(i, "options.sheetName", "")
+		raw, _ := ec.boolean(i, "options.rawData", false)
+		rows, err := readSheet(data, sheet, raw)
+		if err != nil {
+			return nil, err
+		}
+		header, _ := ec.boolean(i, "options.headerRow", true)
+		empty, _ := ec.boolean(i, "options.includeEmptyCells", false)
+		return sheetItems(rows, header, empty), nil
 	case "pdf":
 		join, _ := ec.boolean(i, "options.joinPages", true)
 		maxPages, _ := ec.num(i, "options.maxPages", 0)
@@ -253,6 +268,14 @@ func convertToFileNode(ec *execCtx) ([][]Item, error) {
 		}
 		w.Flush()
 		return single(buf.Bytes(), "text/csv", "data.csv")
+	case "xlsx":
+		sheet, _ := ec.str(0, "options.sheetName", "Sheet")
+		header, _ := ec.boolean(0, "options.headerRow", true)
+		b, err := writeXLSX(items, sheet, header)
+		if err != nil {
+			return nil, err
+		}
+		return single(b, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "data.xlsx")
 	case "html":
 		cols := columnsOf(items)
 		var b strings.Builder

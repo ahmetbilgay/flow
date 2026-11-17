@@ -149,6 +149,7 @@ var googleScopes = map[string]string{
 	"gmail":    "https://mail.google.com/",
 	"drive":    "https://www.googleapis.com/auth/drive",
 	"calendar": "https://www.googleapis.com/auth/calendar",
+	"youtube":  "https://www.googleapis.com/auth/youtube",
 	"docs":     "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive",
 }
 

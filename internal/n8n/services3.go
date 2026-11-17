@@ -587,13 +587,13 @@ func spreadsheetFileNode(ec *execCtx) ([][]Item, error) {
 	op, _ := ec.str(0, "operation", "fromFile")
 	format, _ := ec.str(0, "fileFormat", "csv")
 	if op == "toFile" {
-		if format != "csv" {
-			return nil, permanentError{fmt.Sprintf("Spreadsheet File: %s is not supported (csv is)", format)}
+		if format != "csv" && format != "xlsx" {
+			return nil, permanentError{fmt.Sprintf("Spreadsheet File: writing %s is not supported (csv and xlsx are)", format)}
 		}
-		ec.params["operation"] = "csv"
+		ec.params["operation"] = format
 		return convertToFileNode(ec)
 	}
-	ec.params["operation"] = "csv"
+	ec.params["operation"] = "spreadsheet"
 	if d, _ := ec.str(0, "options.delimiter", ""); d == "" {
 		if ec.params["options"] == nil {
 			ec.params["options"] = map[string]interface{}{}

@@ -2,7 +2,7 @@
 
 Flow, [n8n](https://n8n.io) workflow export'larını içe aktarıp çalıştırabilir. Her n8n node'u kalıcı bir engine adımına dönüşür. Böylece içe aktarılan workflow'lar n8n'in veri modelini (item'lar, paired item'lar, ifadeler) korurken flow'un retry, lease, eşzamanlılık ve kalıcılık özelliklerinden yararlanır.
 
-En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%73'ü tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
+En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%76'sı tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
 
 ## Hızlı başlangıç
 
@@ -67,13 +67,13 @@ Sonuçları `flow.N8NOutputItems(execution.Output)` ile okuyun.
 ## Desteklenenler
 
 - **Trigger'lar ve akış/veri node'ları:** IF, Switch, Merge, Loop, Code (JavaScript), Set ve diğerleri.
-- **Entegrasyonlar:** HTTP Request, Telegram, Gmail, Google Sheets/Drive/Calendar/Docs, Slack, Discord, WhatsApp, Notion, Airtable, WordPress, X, LinkedIn, Outlook, Postgres, MySQL, Redis, Supabase, SMTP.
+- **Entegrasyonlar:** HTTP Request, Telegram, Gmail, IMAP (polling), YouTube, Google Sheets/Drive/Calendar/Docs, Slack, Discord, WhatsApp, Notion, Airtable, WordPress, X, LinkedIn, Outlook, Postgres, MySQL, Redis, Supabase, SMTP.
 - **AI:** Agent (tool, memory ve output parser'larla), LLM zincirleri; OpenAI, Anthropic, Gemini, OpenRouter, Ollama ve diğer modeller; desteklenen her entegrasyonun AI tool olarak kullanımı.
 - **RAG:** Vektör veritabanları (In-Memory, Qdrant, Pinecone, Supabase).
 
 Tam liste için [İngilizce dokümana](../n8n.md) bakın.
 
-**Desteklenmeyenler:** Python Code, `require()`, XLS/XLSX, MCP node'ları, community node'lar.
+**Desteklenmeyenler:** Python Code, `require()`, eski binary .xls dosyaları, MCP node'ları, community node'lar.
 
 ## Güvenlik
 
