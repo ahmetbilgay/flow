@@ -477,6 +477,8 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 	if !Supported(typ) {
 		if isTriggerType(typ) {
 			rep.block(n, "trigger %s is not supported (start the workflow from your app or a webhook instead)", typ)
+		} else if strings.HasPrefix(typ, "n8n-nodes-mcp.") {
+			rep.block(n, "node type %s is not supported: this community MCP client launches local processes (STDIO), which imported workflows may not do", typ)
 		} else {
 			rep.block(n, "node type %s is not supported", typ)
 		}
