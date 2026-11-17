@@ -29,6 +29,9 @@ type execData struct {
 	overlay map[string]*stepView
 	cache   map[string]*stepView
 	opts    *Options
+	// nodeCtx is n8n's per-execution node context ($node["X"].context),
+	// shared by in-process runs such as the iterations of a loop.
+	nodeCtx map[string]map[string]interface{}
 }
 
 func newExecData(exec *models.Execution, wf *models.Workflow, steps []*models.ExecutionStep, opts *Options) *execData {
@@ -40,6 +43,7 @@ func newExecData(exec *models.Execution, wf *models.Workflow, steps []*models.Ex
 		steps:   map[string]*models.ExecutionStep{},
 		overlay: map[string]*stepView{},
 		cache:   map[string]*stepView{},
+		nodeCtx: map[string]map[string]interface{}{},
 		opts:    opts,
 	}
 	if d.exec == nil {
@@ -82,12 +86,16 @@ func newExecData(exec *models.Execution, wf *models.Workflow, steps []*models.Ex
 		if s.Status == models.TaskCompleted && strings.Contains(s.Output, `"__nodeRuns"`) {
 			var env struct {
 				Runs map[string]struct {
-					Outputs map[int][]Item `json:"outputs"`
+					Outputs map[int][]Item         `json:"outputs"`
+					Context map[string]interface{} `json:"context"`
 				} `json:"__nodeRuns"`
 			}
 			if json.Unmarshal([]byte(s.Output), &env) == nil {
 				for id, r := range env.Runs {
 					d.cache[id] = &stepView{executed: true, outputs: r.Outputs}
+					if r.Context != nil {
+						d.nodeCtx[id] = r.Context
+					}
 				}
 			}
 		}

@@ -56,7 +56,7 @@ const contextSrc = `(function (g) {
       pairedItem: function (i) { return pairedOf(name, i); },
       get isExecuted() { return __hasRun(name); },
       get params() { return JSON.parse(__params(name)); },
-      get context() { return {}; },
+      get context() { return JSON.parse(__nodeContext(name)); },
       get json() { var it = pairedOf(name); return it && it.json; }
     };
   };
@@ -68,7 +68,7 @@ const contextSrc = `(function (g) {
         get json() { var it = pairedOf(name) || items(name, 0)[0]; return it && it.json; },
         get binary() { var it = pairedOf(name) || items(name, 0)[0]; return it && it.binary; },
         get parameter() { return x.params; },
-        context: {}, runIndex: 0
+        get context() { return x.context; }, runIndex: 0
       };
     }
   });
@@ -274,6 +274,16 @@ func (r *Runtime) installHost() error {
 				return nil
 			}
 			return fmt.Sprintf(`{"port":%d,"index":%d}`, port, index)
+		},
+		"__nodeContext": func(name string) string {
+			n, ok := r.data.nodeByName(name)
+			if !ok {
+				return "{}"
+			}
+			if c := r.data.nodeCtx[n.ID]; c != nil {
+				return mustJSON(c)
+			}
+			return "{}"
 		},
 		"__hasRun": func(name string) bool {
 			n, ok := r.data.nodeByName(name)

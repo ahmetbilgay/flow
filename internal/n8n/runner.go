@@ -275,6 +275,9 @@ func parsePorts(out string) parsedPorts {
 
 func splitInBatchesNode(opts *Options) nodeFunc {
 	return func(ec *execCtx) ([][]Item, error) {
+		if ec.version < 3 {
+			return splitInBatchesV1(ec)
+		}
 		rawSpec, ok := ec.node.Config[cfgLoop]
 		if !ok {
 			return nil, permanentError{"Loop Over Items: loop body not prepared (import the workflow with the n8n importer)"}
@@ -354,6 +357,58 @@ func splitInBatchesNode(opts *Options) nodeFunc {
 		}
 		return [][]Item{out, nil}, nil
 	}
+}
+
+// splitInBatchesV1 is Split In Batches v1/v2: a stateful node with one
+// output that is re-entered by a cycle. The first run stores the input and
+// emits the first batch; each later run emits the next batch and ignores its
+// input; once no items are left it emits nothing, ending that branch. Its
+// state is n8n's node context ($node["X"].context.noItemsLeft), which lives
+// for the execution of the enclosing loop.
+func splitInBatchesV1(ec *execCtx) ([][]Item, error) {
+	size := int(toFloatDefault(mustParam(ec, "batchSize", 10.0), 10))
+	if size < 1 {
+		size = 1
+	}
+	c := ec.data.nodeCtx[ec.node.ID]
+	reset, _ := ec.boolean(0, "options.reset", false)
+	var queue []Item
+	if c == nil || reset {
+		c = map[string]interface{}{"currentRunIndex": 0.0}
+		ec.data.nodeCtx[ec.node.ID] = c
+		for i, it := range ec.items() {
+			it.PairedItem = paired(i)
+			queue = append(queue, it)
+		}
+		c["maxRunIndex"] = float64((len(queue) + size - 1) / size)
+	} else {
+		queue, _ = c["items"].([]Item)
+		c["currentRunIndex"] = toFloatDefault(c["currentRunIndex"], 0) + 1
+	}
+	n := size
+	if n > len(queue) {
+		n = len(queue)
+	}
+	batch := append([]Item(nil), queue[:n]...)
+	queue = queue[n:]
+	c["items"] = queue
+	c["noItemsLeft"] = len(queue) == 0
+	return [][]Item{batch}, nil
+}
+
+// persistedContext is the part of a node context recorded in a loop step's
+// output for later steps: everything except Split In Batches' pending items.
+func persistedContext(c map[string]interface{}) map[string]interface{} {
+	if c == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(c))
+	for k, v := range c {
+		if k != "items" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func maxInt(a, b int) int {

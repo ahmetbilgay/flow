@@ -284,7 +284,11 @@ func cycleNode(ec *execCtx) ([][]Item, error) {
 	runsOut := map[string]interface{}{}
 	for _, n := range spec.Nodes {
 		if v, ok := ec.data.overlay[n.ID]; ok {
-			runsOut[n.ID] = map[string]interface{}{"name": n.Name, "outputs": v.outputs}
+			run := map[string]interface{}{"name": n.Name, "outputs": v.outputs}
+			if c := persistedContext(ec.data.nodeCtx[n.ID]); c != nil {
+				run["context"] = c
+			}
+			runsOut[n.ID] = run
 		}
 	}
 	ec.extra = map[string]interface{}{"__nodeRuns": runsOut}

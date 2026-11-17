@@ -471,7 +471,6 @@ var unsupportedExpr = []struct {
 	{regexp.MustCompile(`\brequire\s*\(`), "require() is not available"},
 	{regexp.MustCompile(`\$secrets\b`), "$secrets is not supported"},
 	{regexp.MustCompile(`\$evaluateExpression\b`), "$evaluateExpression is not supported"},
-	{regexp.MustCompile(`\$\(['"][^'"]+['"]\)\.context\b|\.context\[['"]noItemsLeft`), "node context (legacy loop) is not supported"},
 }
 
 func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Report) {
@@ -520,8 +519,8 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 	case "removeDuplicates":
 		switch op := toString(get("operation")); op {
-		case "", "removeDuplicateInputItems", "removeItemsRepeatedWithinPreviousExecutions", "clearDeduplicationHistory":
-			if op == "removeItemsRepeatedWithinPreviousExecutions" {
+		case "", "removeDuplicateInputItems", "removeItemsSeenInPreviousExecutions", "removeItemsRepeatedWithinPreviousExecutions", "clearDeduplicationHistory":
+			if op == "removeItemsSeenInPreviousExecutions" || op == "removeItemsRepeatedWithinPreviousExecutions" {
 				rep.warn(n, "deduplication history uses Options.PollState (process memory by default)")
 			}
 		default:
@@ -588,10 +587,6 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 	case "form":
 		if op := toString(get("operation")); op == "" || op == "page" {
 			rep.warn(n, "form pages need Options.ResumeBaseURL/ResumeSecret; the /form endpoint returns the next page definition")
-		}
-	case "splitInBatches":
-		if n.TypeVersion < 3 {
-			rep.block(n, "Split In Batches v%v loops are not supported (use Loop Over Items v3)", n.TypeVersion)
 		}
 	}
 	checkExpressions(n, params, rep)

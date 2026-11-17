@@ -956,11 +956,14 @@ func compareValues(a, b interface{}) int {
 func removeDuplicatesNode(ec *execCtx) ([][]Item, error) {
 	switch op, _ := ec.str(0, "operation", "removeDuplicateInputItems"); op {
 	case "removeDuplicateInputItems":
-	case "removeItemsRepeatedWithinPreviousExecutions":
+	case "removeItemsSeenInPreviousExecutions", "removeItemsRepeatedWithinPreviousExecutions":
 		return dedupeAcrossExecutions(ec)
 	case "clearDeduplicationHistory":
-		store := ec.pollStore()
-		if err := store.SetPollState(ec.ctx, ec.pollKey()+"#dedupe", "[]"); err != nil {
+		key := ec.dedupeKey()
+		unlock := lockPollKey(key)
+		err := ec.pollStore().SetPollState(ec.ctx, key, "{}")
+		unlock()
+		if err != nil {
 			return nil, err
 		}
 		return passthrough(ec)
@@ -1157,37 +1160,118 @@ func (e permanentError) Permanent() bool { return true }
 
 // dedupeAcrossExecutions drops items whose dedupe value was seen in previous
 // executions (history kept in the poll state store, last 10000 values).
+// dedupeState is the persisted history of "Remove Items Seen in Previous
+// Executions": seen keys (newest last) or the highest incremental/date value.
+type dedupeState struct {
+	Keys []string `json:"keys,omitempty"`
+	Max  *float64 `json:"max,omitempty"`
+	Date string   `json:"date,omitempty"`
+}
+
+// dedupeKey is the history key: per node (default) or shared by the workflow.
+func (ec *execCtx) dedupeKey() string {
+	if scope, _ := ec.str(0, "options.scope", "node"); scope == "workflow" {
+		return engine.NamespaceFromContext(ec.ctx) + "/" + ec.data.wf.ID + "#dedupe"
+	}
+	return ec.pollKey() + "#dedupe"
+}
+
 func dedupeAcrossExecutions(ec *execCtx) ([][]Item, error) {
-	store, key := ec.pollStore(), ec.pollKey()+"#dedupe"
+	key := ec.dedupeKey()
+	unlock := lockPollKey(key)
+	defer unlock()
+	store := ec.pollStore()
 	raw, _, err := store.GetPollState(ec.ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	var seen []string
-	_ = json.Unmarshal([]byte(raw), &seen)
-	set := map[string]bool{}
-	for _, s := range seen {
-		set[s] = true
+	var st dedupeState
+	if raw != "" && json.Unmarshal([]byte(raw), &st) != nil {
+		// History written before the state became an object: a plain key list.
+		_ = json.Unmarshal([]byte(raw), &st.Keys)
 	}
+	logic, _ := ec.str(0, "logic", "removeItemsWithAlreadySeenKeys")
 	var out []Item
-	for i, it := range ec.items() {
-		v, err := ec.param(i, "dedupeValue", "")
-		if err != nil {
-			return nil, err
+	switch logic {
+	case "removeItemsUpToStoredIncrementalKey":
+		max := st.Max
+		for i, it := range ec.items() {
+			v, err := ec.param(i, "incrementalDedupeValue", nil)
+			if err != nil {
+				return nil, err
+			}
+			f, ok := toFloat(v)
+			if !ok {
+				return nil, fmt.Errorf("remove duplicates: incremental value %v of item %d is not a number", v, i)
+			}
+			if st.Max != nil && f <= *st.Max {
+				continue
+			}
+			if max == nil || f > *max {
+				f := f
+				max = &f
+			}
+			it.PairedItem = paired(i)
+			out = append(out, it)
 		}
-		k := toString(v)
-		if set[k] {
-			continue
+		st.Max = max
+	case "removeItemsUpToStoredDate":
+		var prev, max time.Time
+		if st.Date != "" {
+			prev, _ = time.Parse(time.RFC3339Nano, st.Date)
+			max = prev
 		}
-		set[k] = true
-		seen = append(seen, k)
-		it.PairedItem = paired(i)
-		out = append(out, it)
+		for i, it := range ec.items() {
+			v, err := ec.param(i, "dateDedupeValue", nil)
+			if err != nil {
+				return nil, err
+			}
+			t, ok := timeOf(v)
+			if !ok {
+				return nil, fmt.Errorf("remove duplicates: date value %v of item %d is not a valid date", v, i)
+			}
+			if !prev.IsZero() && !t.After(prev) {
+				continue
+			}
+			if t.After(max) {
+				max = t
+			}
+			it.PairedItem = paired(i)
+			out = append(out, it)
+		}
+		if !max.IsZero() {
+			st.Date = max.UTC().Format(time.RFC3339Nano)
+		}
+	default:
+		set := make(map[string]bool, len(st.Keys))
+		for _, s := range st.Keys {
+			set[s] = true
+		}
+		for i, it := range ec.items() {
+			v, err := ec.param(i, "dedupeValue", "")
+			if err != nil {
+				return nil, err
+			}
+			k := toString(v)
+			if set[k] {
+				continue
+			}
+			set[k] = true
+			st.Keys = append(st.Keys, k)
+			it.PairedItem = paired(i)
+			out = append(out, it)
+		}
+		size := 10000
+		if v, ok := ec.raw("options.historySize"); ok {
+			if f, ok := toFloat(v); ok && f >= 1 {
+				size = int(f)
+			}
+		}
+		if len(st.Keys) > size {
+			st.Keys = st.Keys[len(st.Keys)-size:]
+		}
 	}
-	if max := 10000; len(seen) > max {
-		seen = seen[len(seen)-max:]
-	}
-	b, _ := json.Marshal(seen)
+	b, _ := json.Marshal(st)
 	if err := store.SetPollState(ec.ctx, key, string(b)); err != nil {
 		return nil, err
 	}

@@ -80,18 +80,24 @@ type pollCursor struct {
 	unlock func()
 }
 
-func (ec *execCtx) openPoll() (*pollCursor, error) {
-	key := ec.pollKey()
+// lockPollKey serializes in-process access to one poll-state key.
+func lockPollKey(key string) (unlock func()) {
 	m, _ := pollLocks.LoadOrStore(key, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
 	mu.Lock()
+	return mu.Unlock
+}
+
+func (ec *execCtx) openPoll() (*pollCursor, error) {
+	key := ec.pollKey()
+	unlock := lockPollKey(key)
 	store := ec.pollStore()
 	prev, seen, err := store.GetPollState(ec.ctx, key)
 	if err != nil {
-		mu.Unlock()
+		unlock()
 		return nil, err
 	}
-	return &pollCursor{ec: ec, store: store, key: key, prev: prev, seen: seen, unlock: mu.Unlock}, nil
+	return &pollCursor{ec: ec, store: store, key: key, prev: prev, seen: seen, unlock: unlock}, nil
 }
 
 func (p *pollCursor) close() { p.unlock() }
