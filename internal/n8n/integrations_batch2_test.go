@@ -187,12 +187,12 @@ func TestRESTIntegrations(t *testing.T) {
 func TestRSSTriggerDHLAndN8NAPI(t *testing.T) {
 	var feedItems []string
 	f := newFakeAPI(t, func(r recorded) (int, string, interface{}) {
-		switch {
-		case r.path == "/feed.xml":
+		switch r.path {
+		case "/feed.xml":
 			return 200, "application/rss+xml", `<?xml version="1.0"?><rss><channel>` + strings.Join(feedItems, "") + `</channel></rss>`
-		case r.path == "/track/shipments":
+		case "/track/shipments":
 			return 200, "application/json", map[string]interface{}{"shipments": []interface{}{map[string]interface{}{"id": "JD1", "status": map[string]interface{}{"statusCode": "transit"}}}}
-		case r.path == "/api/v1/workflows":
+		case "/api/v1/workflows":
 			if strings.Contains(r.query, "cursor=c2") {
 				return 200, "application/json", map[string]interface{}{"data": []interface{}{map[string]interface{}{"id": "w2"}}}
 			}
