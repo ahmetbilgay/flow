@@ -178,6 +178,7 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.emailReadImap":               "poll",
 	"n8n-nodes-base.microsoftOutlookTrigger":     "poll",
 	"n8n-nodes-base.rssFeedReadTrigger":          "poll",
+	"n8n-nodes-base.localFileTrigger":            "poll",
 	"@n8n/n8n-nodes-langchain.mcpTrigger":        "mcp",
 	"n8n-nodes-base.twilioTrigger":               "webhook",
 }
@@ -538,7 +539,7 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 	case "code":
 		if l := toString(get("language")); l == "python" || l == "pythonNative" {
-			rep.block(n, "Python code is not supported")
+			rep.warn(n, "Python code runs on the worker's python3 only with Options.AllowLocalProcesses; install the packages it imports")
 		}
 	case "sort":
 		if toString(get("type")) == "code" {
@@ -579,6 +580,10 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 				rep.warn(n, "this MCP client starts a local process (STDIO); it runs only with Options.AllowLocalProcesses")
 			}
 		}
+	case "executeCommand":
+		rep.warn(n, "Execute Command runs a shell command on the worker only with Options.AllowLocalProcesses")
+	case "localFileTrigger":
+		rep.warn(n, "Local File Trigger watches paths inside Options.FileSystemRoot (polled every 10 seconds)")
 	case "chat":
 		if toBool(get("waitUserReply")) {
 			rep.block(n, "Respond to Chat waiting for the user's reply is not supported")
@@ -759,6 +764,9 @@ func triggerSpec(n *rawNode, rep *Report) TriggerSpec {
 		ts.Cron = pollTimesCron(n.Parameters)
 		if len(ts.Cron) == 0 && n.Type == "n8n-nodes-base.emailReadImap" {
 			ts.Cron = []string{imapPollCron}
+		}
+		if _, set := n.Parameters["pollTimes"]; !set && n.Type == "n8n-nodes-base.localFileTrigger" {
+			ts.Cron = []string{localFileTriggerPollCron}
 		}
 	case "schedule":
 		crons, err := scheduleCrons(n)

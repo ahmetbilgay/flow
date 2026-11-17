@@ -59,6 +59,8 @@ type Options struct {
 	// Execute Command, Python Code and STDIO MCP servers. Off by default;
 	// enable only for trusted workflows on isolated workers.
 	AllowLocalProcesses bool
+	// PythonPath is the interpreter for Python Code nodes (default python3).
+	PythonPath string
 }
 
 func (o *Options) exprTimeout() time.Duration {

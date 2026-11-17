@@ -2,7 +2,7 @@
 
 Flow, [n8n](https://n8n.io) workflow export'larını içe aktarıp çalıştırabilir. Her n8n node'u kalıcı bir engine adımına dönüşür. Böylece içe aktarılan workflow'lar n8n'in veri modelini (item'lar, paired item'lar, ifadeler) korurken flow'un retry, lease, eşzamanlılık ve kalıcılık özelliklerinden yararlanır.
 
-En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%94'ü tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
+En çok görüntülenen 299 public n8n şablonu üzerinde yapılan ölçümde **%97'si tam çalışabilir** olarak içe aktarılıyor. Bu, tüm node ve özelliklerin destekleniyor olduğu anlamına gelir; credential'ların yine de sağlanması gerekir. Diğerleri için importer eksik olanı tam olarak raporlar.
 
 ## Hızlı başlangıç
 
@@ -73,13 +73,14 @@ Sonuçları `flow.N8NOutputItems(execution.Output)` ile okuyun.
 
 Tam liste için [İngilizce dokümana](../n8n.md) bakın.
 
-**Desteklenmeyenler:** Python Code, `require()`, eski binary .xls dosyaları, community node'lar.
+**Desteklenmeyenler:** `crypto`/`util` dışındaki `require()` modülleri, eski binary .xls dosyaları, community node'lar.
 
 ## Güvenlik
 
 İçe aktarılan workflow'lar güvenilmez kod olarak ele alınır:
 - **Ağ:** Tüm dış bağlantılar `Outbound` politikasından geçer. Varsayılan olarak yalnızca public adreslere izin verilir (SSRF koruması).
-- **JavaScript:** Kod; `require`, ağ ve dosya erişimi olmayan, zaman sınırlı bir sandbox'ta çalışır.
+- **JavaScript:** Kod, dosya erişimi olmayan, zaman sınırlı bir sandbox'ta çalışır. `require` yalnızca `crypto` ve `util` sağlar; Code içinden HTTP (`this.helpers.httpRequest`) `Outbound` politikasından geçer.
+- **Yerel süreçler (varsayılan kapalı):** Execute Command, Python Code (`python3` ile; içe aktarılan paketler worker'a kurulmalı) ve STDIO MCP sunucuları yalnızca `AllowLocalProcesses` açıkken çalışır. Bunu sadece güvenilir workflow'lar ve izole worker'lar için açın. Local File Trigger yalnızca `FileSystemRoot` içini izler.
 - **Ortam değişkenleri ve dosyalar:** `$env` ve dosya erişimi varsayılan olarak kapalıdır.
 - **Resume bağlantıları:** HMAC ile imzalanır ve bekleyen node'a bağlıdır. Onay bağlantıları cevabı da imzalar; onay, e-posta tarayıcılarının bağlantıyı açmasıyla verilemesin diye bir onay sayfasındaki POST ile kaydedilir.
 - **Credential'lar alan adına bağlıdır:** Bir şablon credential'larınızı kendi sunucusuna gönderemez. Bilinen servislerin credential'ları yalnızca kendi API alan adlarına gider. Herhangi bir credential'a `allowedDomains` ekleyerek bunu açıkça kısıtlayabilirsiniz.

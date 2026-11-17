@@ -126,6 +126,8 @@ func nodeTypes() map[string]nodeFunc {
 		b + "rssFeedReadTrigger":           rssFeedReadTriggerNode,
 		b + "dhl":                          dhlNode,
 		b + "n8n":                          n8nAPINode,
+		b + "executeCommand":               executeCommandNode,
+		b + "localFileTrigger":             localFileTriggerNode,
 		b + "if":                           ifNode,
 		b + "filter":                       filterNode,
 		b + "switch":                       switchNode,

@@ -91,7 +91,9 @@ func toItemsResult(v interface{}, inputCount int) ([]Item, error) {
 
 func codeNode(ec *execCtx) ([][]Item, error) {
 	if lang, _ := ec.str(0, "language", "javaScript"); lang == "python" || lang == "pythonNative" {
-		return nil, permanentError{"Code node: Python is not supported"}
+		code, _ := ec.str(0, "pythonCode", "")
+		mode, _ := ec.str(0, "mode", "runOnceForAllItems")
+		return runPython(ec, code, mode == "runOnceForEachItem")
 	}
 	code, _ := ec.str(0, "jsCode", "")
 	if code == "" {

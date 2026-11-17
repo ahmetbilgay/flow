@@ -2,7 +2,7 @@
 
 Flow can import and run [n8n](https://n8n.io) workflow exports. Every n8n node becomes a durable engine step, so imported workflows get flow's retries, leases, concurrency and persistence while keeping n8n's data model (items, paired items, expressions).
 
-Measured on the 299 most-viewed public n8n templates, **94% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
+Measured on the 299 most-viewed public n8n templates, **97% import as fully runnable** (every node and feature supported; credentials still have to be provided). The importer reports exactly what is missing for the rest.
 
 ## Quick start
 
@@ -96,7 +96,7 @@ Waits longer than 65 seconds do not hold a worker: the step is stored as waiting
 
 ## Not supported
 
-Python Code nodes, `require()` of modules other than `crypto`/`util`, `this.helpers` methods other than httpRequest/request/prepareBinaryData/getBinaryDataBuffer/returnJsonArray, legacy binary .xls files, writing ODS/XLS, Google Drive v1/v2 list operations, sub-node memory managers and community nodes. The report lists them as blocking issues.
+`require()` of other modules, `this.helpers` methods other than httpRequest/request/prepareBinaryData/getBinaryDataBuffer/returnJsonArray, legacy binary .xls files, writing ODS/XLS, Google Drive v1/v2 list operations, sub-node memory managers and community nodes. The report lists them as blocking issues.
 
 ## Security
 
@@ -104,7 +104,8 @@ Imported workflows are untrusted code:
 
 - **Network:** every outbound connection (HTTP, AI providers, integrations, SMTP, databases, Redis) goes through `N8NOptions.Outbound` — public internet addresses only by default (SSRF protection). Allow internal services explicitly with `AllowedHosts`.
 - **Credentials are bound to domains.** A template cannot send your credentials to its own server. Well-known credential types (OpenAI, Anthropic, Google, Slack, Notion, …) are only sent to their service's domain or the credential's own `url`/`baseUrl`. Add `allowedDomains` (comma-separated or a list) to any credential to restrict it explicitly; generic header/query/basic credentials without `allowedDomains` are sent wherever the workflow points. `CredentialRef` carries the workflow ID and node name, so your provider can also refuse credentials per workflow.
-- **JavaScript:** expressions (5 s) and Code nodes (60 s) run without `require`, network or filesystem, with a recursion limit and regex match timeouts. A run stuck in native code is abandoned so the worker is freed. CPU time is bounded; **memory is not** (a goja limitation), so run untrusted workflows on isolated worker processes with a memory limit.
+- **JavaScript:** expressions (5 s) and Code nodes (60 s) run without filesystem access; `require` offers only `crypto`, `util` (and a LangChain subset in LangChain Code nodes), and HTTP from Code (`this.helpers.httpRequest`) goes through the outbound policy; with a recursion limit and regex match timeouts. A run stuck in native code is abandoned so the worker is freed. CPU time is bounded; **memory is not** (a goja limitation), so run untrusted workflows on isolated worker processes with a memory limit.
+- **Local processes (off by default):** Execute Command, Python Code (run on `PythonPath`, default `python3`; `micropip.install` is a no-op, so install the packages a workflow imports on the worker) and STDIO MCP servers run only with `N8NOptions.AllowLocalProcesses`. Enable it only for trusted workflows on isolated workers. The Local File Trigger watches paths inside `FileSystemRoot` (polled every 10 seconds).
 - **Environment & files:** `$env` is empty unless `N8NOptions.Env` is set; file nodes are disabled unless `N8NOptions.FileSystemRoot` points to a sandbox directory (symlinks are refused, sizes are capped).
 - **Resume links** are HMAC-signed with `ResumeSecret` and bound to the waiting node; approval links also sign the answer. Approvals are recorded with POST behind a confirmation page, so mail scanners that open links cannot answer. Execution-level links (`$execution.resumeUrl`) only resume Wait nodes.
 - **HTTP endpoints:** Respond to Webhook cannot set cookies or other origin-wide headers (`Set-Cookie`, HSTS, CORS credentials). Workflows still control the response body, so **mount `N8NHandler` on a separate origin** (e.g. `hooks.example.com`) when installing untrusted workflows. A webhook path can only belong to one workflow (`ErrN8NWebhookConflict`).
