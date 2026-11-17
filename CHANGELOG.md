@@ -9,6 +9,25 @@ hardens the engine for running untrusted workflow definitions (e.g. imported
 templates). **It contains behavior changes that need action before deploying**;
 read the [Upgrade guide](#upgrade-guide) first.
 
+### n8n compatibility
+
+- **Import and run n8n workflows** (`EnableN8N`, `ImportN8NWorkflow`, `InstallN8NWorkflow`, `N8NHandler`). Each n8n node runs as a durable engine step with n8n's item model, paired-item tracing and `{{ }}` expressions (sandboxed JavaScript with n8n's helpers and a Luxon-compatible `DateTime`).
+- 86 node types plus AI/RAG sub-nodes: flow & data nodes, Code, loops (Loop Over Items and polling cycles), sub-workflows, HTTP Request, Telegram, Gmail, Google Sheets/Drive/Calendar/Docs, Slack, Discord, WhatsApp, Notion, Airtable, WordPress, X, LinkedIn, Outlook, Postgres, MySQL, Redis, Supabase, SMTP, file utilities; AI Agent with tools/memory/output parsers on OpenAI, Anthropic, Gemini and OpenAI-compatible providers; RAG with Qdrant, Pinecone, Supabase and in-memory stores; any supported integration usable as an AI tool.
+- Webhook (all response modes), chat, form, Telegram/WhatsApp, schedule and polling (Gmail/Sheets/Drive) triggers; human-in-the-loop via signed resume URLs (Wait on webhook, send-and-wait approvals, multi-page forms).
+- Compatibility report per workflow (blocking issues, warnings, credentials, triggers) and a corpus benchmark (`-tags n8ncorpus`): 67% of the 299 most-viewed public templates import as fully runnable.
+- All outbound traffic of n8n nodes (HTTP, AI providers, SMTP, databases) is subject to the SSRF policy; `$env` and file access are opt-in.
+- Hardening for untrusted workflows: credentials are bound to their service domains (`allowedDomains`), JavaScript runs cannot hang a worker (abandoned runs, regex match timeouts, recursion limit), approval links sign the answer and require a POST confirmation, resume links are node-scoped, Respond to Webhook cannot set cookies/HSTS, webhook paths cannot be hijacked by another workflow, email headers cannot be injected, credential headers are dropped on cross-host redirects, secrets are redacted from errors, IPv6 transition ranges (NAT64/6to4/Teredo) are blocked, file sandbox refuses symlinks, connection pools are bounded and keyed by credentials, the in-memory vector store is per namespace.
+
+### Engine
+
+- **Compare-and-set state transitions** (`storage.ConditionalUpdater`, implemented by memory, SQL and Redis): two concurrent resumes of the same waiting step can no longer both apply (`ErrStepConflict`); a reclaimed worker's late result is discarded and its executor is cancelled when the lease is lost; the timeout reaper cannot overwrite a resumed step; finishing, failing and cancelling an execution cannot overwrite each other.
+- Steps of failed, completed or cancelled executions are no longer run (compensation steps still are).
+- Redis: step creation, updates and claims are atomic Lua scripts; claims never revive finished or waiting steps.
+- `CompleteStep` keeps scheduling children even if the caller's context is cancelled; a periodic sweep finalizes executions left RUNNING after a crash.
+- Durable timers (`WaitUntilError`): executors can pause until a time without holding a worker.
+- Port-aware routing: nodes can emit to several outputs at once (`{"__ports": {...}}`) and receive per-input data (`InputBuilder`, `Edge.TargetInput`).
+- Fixed a race where a worker finishing the last branch could complete an execution while another worker was about to schedule a join step, leaving that step orphaned.
+
 ### Security
 
 - **SSRF protection for `http` and `notify` nodes.** By default they can only
@@ -76,6 +95,7 @@ read the [Upgrade guide](#upgrade-guide) first.
 
 ### Changed
 
+- New dependencies for n8n support: goja (JavaScript), regexp2, goquery, goldmark, html-to-markdown and a PDF text extractor (all pinned to versions that keep the Go 1.23 requirement).
 - Prometheus: `flow_workflows_failed_total` label `error` is renamed to
   `failed_node` and now holds the failed node ID (the raw error message caused
   unbounded label cardinality).

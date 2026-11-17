@@ -3,6 +3,7 @@
 - Core Concepts
   - [API Reference](api.md)
   - [Node Types](nodes.md)
+  - [n8n Workflows](n8n.md)
 - Infrastructure
   - [Storage Backends](storage.md)
   - [Advanced Features](advanced.md)

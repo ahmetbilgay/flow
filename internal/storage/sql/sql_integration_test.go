@@ -194,3 +194,35 @@ func runClaimIsolationAndLease(t *testing.T, store *SQLStorage) {
 
 func TestMySQLClaimIsolation(t *testing.T)    { runClaimIsolationAndLease(t, openMySQL(t)) }
 func TestPostgresClaimIsolation(t *testing.T) { runClaimIsolationAndLease(t, openPostgres(t)) }
+
+func runCAS(t *testing.T, store *SQLStorage) {
+	t.Helper()
+	ctx := context.Background()
+	ns := integrationtest.UniqueNamespace()
+	id := integrationtest.UniqueID()
+	step := &models.ExecutionStep{ID: id, ExecutionID: "e", NodeID: "n", Status: models.TaskWaiting, StartedAt: time.Now()}
+	if err := store.CreateExecutionStep(ctx, ns, step); err != nil {
+		t.Fatal(err)
+	}
+	step.Status = models.TaskCompleted
+	if ok, err := store.UpdateExecutionStepIf(ctx, ns, step, models.TaskWaiting, ""); err != nil || !ok {
+		t.Fatalf("first CAS: %v %v", ok, err)
+	}
+	if ok, err := store.UpdateExecutionStepIf(ctx, ns, step, models.TaskWaiting, ""); err != nil || ok {
+		t.Fatalf("second CAS must fail: %v %v", ok, err)
+	}
+	exec := &models.Execution{ID: integrationtest.UniqueID(), WorkflowID: "w", Status: models.TaskRunning, StartedAt: time.Now()}
+	if err := store.CreateExecution(ctx, ns, exec); err != nil {
+		t.Fatal(err)
+	}
+	exec.Status = models.TaskCompleted
+	if ok, _ := store.UpdateExecutionIf(ctx, ns, exec, models.TaskRunning); !ok {
+		t.Fatal("execution CAS should apply")
+	}
+	if ok, _ := store.UpdateExecutionIf(ctx, ns, exec, models.TaskRunning); ok {
+		t.Fatal("execution CAS must not apply twice")
+	}
+}
+
+func TestMySQLCAS(t *testing.T)    { runCAS(t, openMySQL(t)) }
+func TestPostgresCAS(t *testing.T) { runCAS(t, openPostgres(t)) }

@@ -169,6 +169,18 @@ Built-in node types are automatically registered:
 - `wait` - Delay execution
 - `setvariable` - Context manipulation
 
+## n8n Workflows
+
+Import and run [n8n](https://n8n.io) workflow exports and templates. Every n8n node becomes a durable engine step; expressions, items, paired items, loops, sub-workflows, AI agents (OpenAI, Anthropic, Gemini, …), RAG (Qdrant, Pinecone, Supabase) and 40+ integrations are supported. On the 299 most-viewed public templates, 67% import as fully runnable, and the importer reports exactly what is missing for the rest.
+
+```go
+eng.EnableN8N(flow.N8NOptions{Credentials: myVault})
+res, err := eng.InstallN8NWorkflow(ctx, "default", workflowJSON, flow.N8NInstallOptions{})
+http.Handle("/n8n/", http.StripPrefix("/n8n", eng.N8NHandler(flow.N8NHandlerOptions{Namespace: "default"})))
+```
+
+See [docs/n8n.md](docs/n8n.md) for the full guide (supported nodes, endpoints, credentials, security).
+
 ## Configuration
 
 ### Retry Policy

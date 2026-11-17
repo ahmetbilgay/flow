@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -164,15 +165,51 @@ func (e *Engine) StartWorkflow(ctx context.Context, namespace, workflowID string
 	return execID, nil
 }
 
-// CompleteStep handles the transition after a node finishes
+// ErrStepConflict is returned when a step changed concurrently (e.g. a
+// waiting step was already resumed, or a reclaimed step is now owned by
+// another worker) and the transition was not applied.
+var ErrStepConflict = errors.New("step was changed concurrently")
+
+// updateStepIf applies a compare-and-set step write when the storage
+// supports it (all built-in backends do).
+func (e *Engine) updateStepIf(ctx context.Context, step *models.ExecutionStep, from models.TaskStatus, worker string) (bool, error) {
+	if cu, ok := e.storage.(storage.ConditionalUpdater); ok {
+		return cu.UpdateExecutionStepIf(ctx, step.Namespace, step, from, worker)
+	}
+	return true, e.storage.UpdateExecutionStep(ctx, step.Namespace, step)
+}
+
+// updateExecIf applies a compare-and-set execution write.
+func (e *Engine) updateExecIf(ctx context.Context, exec *models.Execution, from models.TaskStatus) (bool, error) {
+	if cu, ok := e.storage.(storage.ConditionalUpdater); ok {
+		return cu.UpdateExecutionIf(ctx, exec.Namespace, exec, from)
+	}
+	return true, e.storage.UpdateExecution(ctx, exec.Namespace, exec)
+}
+
+// CompleteStep handles the transition after a node finishes. The step must
+// still be in the state the caller read (WAITING, or RUNNING and owned by
+// the same worker); otherwise ErrStepConflict is returned and nothing
+// changes. Scheduling continues even if ctx is cancelled after the step was
+// persisted, so children are never orphaned by a disconnected caller.
 func (e *Engine) CompleteStep(ctx context.Context, step *models.ExecutionStep, output string) error {
+	ctx = context.WithoutCancel(ctx)
+	from, worker := step.Status, ""
+	if from == models.TaskRunning {
+		worker = step.WorkerID
+	}
 	step.Status = models.TaskCompleted
 	step.Output = output
+	step.Error = ""
 	now := time.Now()
 	step.FinishedAt = &now
 
-	if err := e.storage.UpdateExecutionStep(ctx, step.Namespace, step); err != nil {
+	ok, err := e.updateStepIf(ctx, step, from, worker)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return ErrStepConflict
 	}
 
 	exec, err := e.storage.GetExecution(ctx, step.Namespace, step.ExecutionID)
@@ -208,14 +245,18 @@ func (e *Engine) CancelExecution(ctx context.Context, namespace string, execID s
 	if err != nil {
 		return err
 	}
-	if exec.Status == models.TaskCompleted || exec.Status == models.TaskFailed {
+	if exec.Status != models.TaskRunning {
 		return fmt.Errorf("cannot cancel finished execution")
 	}
 	exec.Status = models.TaskCancelled
 	now := time.Now()
 	exec.FinishedAt = &now
-	if err := e.storage.UpdateExecution(ctx, namespace, exec); err != nil {
+	ok, err := e.updateExecIf(ctx, exec, models.TaskRunning)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return fmt.Errorf("cannot cancel finished execution")
 	}
 	e.emit(ctx, Event{Type: EventTypeWorkflowCancelled, Namespace: namespace, Execution: exec})
 	return nil
@@ -241,7 +282,8 @@ func (e *Engine) failExecution(ctx context.Context, namespace string, execID str
 	exec.ErrorMessage = message
 	now := time.Now()
 	exec.FinishedAt = &now
-	if err := e.storage.UpdateExecution(ctx, namespace, exec); err != nil {
+	ok, err := e.updateExecIf(ctx, exec, models.TaskRunning)
+	if err != nil || !ok {
 		return err
 	}
 	e.emit(ctx, Event{Type: EventTypeWorkflowFailed, Namespace: namespace, Execution: exec})
@@ -272,6 +314,7 @@ func (e *Engine) SignalExecution(ctx context.Context, namespace string, execID s
 	// Merge signal data with existing input so downstream nodes (like condition) can access it
 	mergedOutput := e.mergeSignalData(targetStep.Input, output)
 
+	ctx = context.WithoutCancel(ctx)
 	e.logger.Info("Signaling execution resume", "execution", execID, "node", nodeID)
 	e.emit(ctx, Event{
 		Type: EventTypeSignalReceived, Namespace: namespace,
@@ -332,6 +375,14 @@ func (e *Engine) ReapTimeouts(ctx context.Context, namespace string) error {
 		if exec.Status != models.TaskRunning {
 			continue
 		}
+		if step.Action == timerAction {
+			if step.DueAt != nil && !time.Now().Before(*step.DueAt) {
+				if err := e.CompleteStep(ctx, step, step.Output); err != nil && !errors.Is(err, ErrStepConflict) {
+					e.logger.Error("Failed to resume timer step", "step", step.ID, "error", err)
+				}
+			}
+			continue
+		}
 
 		wf, ok := wfCache[exec.WorkflowID]
 		if !ok {
@@ -356,15 +407,19 @@ func (e *Engine) ReapTimeouts(ctx context.Context, namespace string) error {
 			continue
 		}
 
-		e.logger.Warn("Step timed out waiting for signal", "step", step.ID, "node", step.NodeID)
 		step.Status = models.TaskFailed
 		step.Error = "SIGNAL_TIMEOUT"
 		now := time.Now()
 		step.FinishedAt = &now
-		if err := e.storage.UpdateExecutionStep(ctx, namespace, step); err != nil {
+		applied, err := e.updateStepIf(ctx, step, models.TaskWaiting, "")
+		if err != nil {
 			e.logger.Error("Failed to update timed out step", "step", step.ID, "error", err)
 			continue
 		}
+		if !applied {
+			continue // resumed or reaped concurrently
+		}
+		e.logger.Warn("Step timed out waiting for signal", "step", step.ID, "node", step.NodeID)
 		if err := e.checkAndFinishExecution(ctx, exec); err != nil {
 			e.logger.Error("Failed to finish execution after timeout", "execution", exec.ID, "error", err)
 		}
@@ -458,6 +513,34 @@ func (e *Engine) checkAndFinishExecution(ctx context.Context, exec *models.Execu
 	if err != nil {
 		return err
 	}
+	for _, s := range steps {
+		if !isTerminal(s.Status) {
+			return nil
+		}
+	}
+
+	// Another worker may have just completed a predecessor and not yet
+	// created the downstream step. Resolve every node without a step
+	// (idempotent: step IDs are deterministic) so nothing is left behind.
+	if wf, err := e.storage.GetWorkflow(ctx, current.Namespace, current.WorkflowID); err == nil {
+		if g, err := NewGraph(wf); err == nil {
+			byNode := nodeSteps(current.ID, steps)
+			created := false
+			for _, n := range wf.Nodes {
+				if byNode[n.ID] == nil && len(g.Predecessors[n.ID]) > 0 {
+					if err := e.resolveNode(ctx, current, wf, g, n.ID); err != nil {
+						return err
+					}
+					created = true
+				}
+			}
+			if created {
+				if steps, err = e.storage.GetExecutionSteps(ctx, exec.Namespace, exec.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	var lastCompleted, firstFailed *models.ExecutionStep
 	for _, s := range steps {
@@ -491,8 +574,12 @@ func (e *Engine) checkAndFinishExecution(ctx context.Context, exec *models.Execu
 		e.logger.Info("Execution completed", "execution", current.ID)
 		telemetry.WorkflowsCompleted.WithLabelValues(current.Namespace, current.WorkflowID).Inc()
 	}
-	if err := e.storage.UpdateExecution(ctx, current.Namespace, current); err != nil {
+	ok, err := e.updateExecIf(ctx, current, models.TaskRunning)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil // finished, failed or cancelled concurrently
 	}
 	*exec = *current
 	evType := EventTypeWorkflowCompleted
@@ -513,4 +600,84 @@ func finishedAfter(a, b *models.ExecutionStep) bool {
 		bt = *b.FinishedAt
 	}
 	return at.After(bt)
+}
+
+// ExecutionSnapshot returns an execution with its workflow and steps, without
+// auth checks. It is meant for executors running inside that execution
+// (e.g. expression engines resolving other nodes' outputs).
+func (e *Engine) ExecutionSnapshot(ctx context.Context, namespace, execID string) (*models.Execution, *models.Workflow, []*models.ExecutionStep, error) {
+	exec, err := e.storage.GetExecution(ctx, namespace, execID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	wf, err := e.storage.GetWorkflow(ctx, namespace, exec.WorkflowID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	steps, err := e.storage.GetExecutionSteps(ctx, namespace, execID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return exec, wf, steps, nil
+}
+
+// NodeRegistry returns the executor registry used by this engine.
+func (e *Engine) NodeRegistry() *Registry {
+	return e.registry
+}
+
+// WorkflowDefinition loads a workflow definition without auth checks (for
+// executors that run other workflows of the same namespace).
+func (e *Engine) WorkflowDefinition(ctx context.Context, namespace, id string) (*models.Workflow, error) {
+	return e.storage.GetWorkflow(ctx, namespace, id)
+}
+
+func isTerminal(s models.TaskStatus) bool {
+	return s == models.TaskCompleted || s == models.TaskFailed || s == models.TaskSkipped
+}
+
+// WorkflowDefinitions lists workflow definitions of a namespace without auth
+// checks (for trigger routing).
+func (e *Engine) WorkflowDefinitions(ctx context.Context, namespace string) ([]*models.Workflow, error) {
+	return e.storage.ListWorkflows(ctx, namespace)
+}
+
+// SweepStuckExecutions finishes RUNNING executions whose steps have all
+// settled but that were never finalized (e.g. a process crashed between
+// completing a step and scheduling its children). It returns how many
+// executions changed state. Workers call it periodically.
+func (e *Engine) SweepStuckExecutions(ctx context.Context, namespace string, olderThan time.Duration) (int, error) {
+	execs, err := e.storage.ListExecutions(ctx, namespace)
+	if err != nil {
+		return 0, err
+	}
+	changed := 0
+	for _, exec := range execs {
+		if exec.Status != models.TaskRunning || time.Since(exec.StartedAt) < olderThan {
+			continue
+		}
+		steps, err := e.storage.GetExecutionSteps(ctx, namespace, exec.ID)
+		if err != nil {
+			continue
+		}
+		settled := true
+		for _, s := range steps {
+			if !isTerminal(s.Status) {
+				settled = false
+				break
+			}
+		}
+		if !settled {
+			continue
+		}
+		before := exec.Status
+		if err := e.checkAndFinishExecution(ctx, exec); err != nil {
+			e.logger.Error("Sweep failed", "execution", exec.ID, "error", err)
+			continue
+		}
+		if exec.Status != before {
+			changed++
+		}
+	}
+	return changed, nil
 }

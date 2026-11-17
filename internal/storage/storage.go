@@ -26,6 +26,19 @@ type StepHeartbeater interface {
 	HeartbeatStep(ctx context.Context, namespace, stepID, workerID string) (bool, error)
 }
 
+// ConditionalUpdater is implemented by storages that support compare-and-set
+// writes (all built-in backends). The engine uses it for every state
+// transition so concurrent actors (two resume requests, a reclaimed zombie
+// worker, the timeout reaper) cannot overwrite each other's results.
+type ConditionalUpdater interface {
+	// UpdateExecutionStepIf writes step only if the stored step currently has
+	// status from and, when worker is not empty, is owned by worker. It
+	// returns false (and no error) when the condition does not hold.
+	UpdateExecutionStepIf(ctx context.Context, namespace string, step *models.ExecutionStep, from models.TaskStatus, worker string) (bool, error)
+	// UpdateExecutionIf writes exec only if the stored status is from.
+	UpdateExecutionIf(ctx context.Context, namespace string, exec *models.Execution, from models.TaskStatus) (bool, error)
+}
+
 // TaskFilter filters waiting / human task steps.
 type TaskFilter struct {
 	ExecutionID string

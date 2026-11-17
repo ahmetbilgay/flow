@@ -10,6 +10,7 @@ import (
 	"github.com/dgmos/flow/internal/models"
 	"github.com/dgmos/flow/internal/storage"
 	"github.com/dgmos/flow/internal/storage/integrationtest"
+	"github.com/redis/go-redis/v9"
 )
 
 func openRedis(t *testing.T) *RedisStorage {
@@ -136,5 +137,36 @@ func TestRedisRetryRequeueAndLease(t *testing.T) {
 	}
 	if n, _ := store.client.ZCard(ctx, runningSet(ns)).Result(); n != 0 {
 		t.Fatalf("running set should be empty, has %d", n)
+	}
+}
+
+func TestRedisCASAndNoRevive(t *testing.T) {
+	store := openRedis(t)
+	ctx := context.Background()
+	ns := integrationtest.UniqueNamespace()
+	id := integrationtest.UniqueID()
+	step := &models.ExecutionStep{ID: id, ExecutionID: "e1", NodeID: "n1", Status: models.TaskPending}
+	if err := store.CreateExecutionStep(ctx, ns, step); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimReadyStep(ctx, ns, "w1")
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	// Owner check: another worker cannot finish the step.
+	claimed.Status = models.TaskCompleted
+	if ok, _ := store.UpdateExecutionStepIf(ctx, ns, claimed, models.TaskRunning, "w2"); ok {
+		t.Fatal("non-owner CAS must fail")
+	}
+	if ok, _ := store.UpdateExecutionStepIf(ctx, ns, claimed, models.TaskRunning, "w1"); !ok {
+		t.Fatal("owner CAS must apply")
+	}
+	// Simulate a stale running-set entry left behind for the finished step.
+	store.client.ZAdd(ctx, runningSet(ns), redis.Z{Score: 1, Member: id})
+	if s, err := store.ClaimReadyStep(ctx, ns, "w3"); err != nil || s != nil {
+		t.Fatalf("a finished step must never be revived: %+v %v", s, err)
+	}
+	if n, _ := store.client.ZCard(ctx, runningSet(ns)).Result(); n != 0 {
+		t.Fatalf("stale entry should be dropped, running set has %d", n)
 	}
 }

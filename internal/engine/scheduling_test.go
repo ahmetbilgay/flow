@@ -303,3 +303,93 @@ func TestMemoryHeartbeatKeepsLease(t *testing.T) {
 		t.Fatal("stale step should be reclaimable")
 	}
 }
+
+// Worker A marks "a" COMPLETED but pauses before scheduling "join"; worker B
+// then finishes the last other branch. B must schedule "join" instead of
+// finishing the execution and orphaning it.
+func TestFinishDoesNotOrphanPendingJoin(t *testing.T) {
+	e, store := newTestEngine(t)
+	ctx := context.Background()
+	wf := &models.Workflow{
+		ID:    "race",
+		Nodes: []models.Node{node("a", nil), node("b", nil), node("join", nil), node("leaf", nil)},
+		Edges: []models.Edge{edge("a", "join", ""), edge("b", "join", ""), edge("b", "leaf", "")},
+	}
+	_ = e.RegisterWorkflow(ctx, "ns", wf)
+	execID, _ := e.StartWorkflow(ctx, "ns", "race", `{}`)
+	if err := completeNode(t, e, store, execID, "b", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	// Worker A: persist completion of "a" only.
+	a := stepsByNode(t, store, execID)["a"][0]
+	a.Status = models.TaskCompleted
+	_ = store.UpdateExecutionStep(ctx, "ns", a)
+	// Worker B: finishes "leaf".
+	if err := completeNode(t, e, store, execID, "leaf", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if exec, _ := store.GetExecution(ctx, "ns", execID); exec.Status != models.TaskRunning {
+		t.Fatalf("execution finished with join unscheduled: %s", exec.Status)
+	}
+	if got := stepsByNode(t, store, execID)["join"]; len(got) != 1 || got[0].Status != models.TaskPending {
+		t.Fatalf("join should be scheduled by the finisher: %+v", got)
+	}
+}
+
+func TestConcurrentResumeOnlyOneWins(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		e, store := newTestEngine(t)
+		ctx := context.Background()
+		wf := &models.Workflow{ID: "w", Nodes: []models.Node{node("a", nil), node("b", nil)}, Edges: []models.Edge{edge("a", "b", "")}}
+		_ = e.RegisterWorkflow(ctx, "ns", wf)
+		execID, _ := e.StartWorkflow(ctx, "ns", "w", `{}`)
+		a := stepsByNode(t, store, execID)["a"][0]
+		a.Status = models.TaskWaiting
+		_ = store.UpdateExecutionStep(ctx, "ns", a)
+
+		var wg sync.WaitGroup
+		results := make(chan error, 2)
+		for _, out := range []string{`{"approved":true}`, `{"approved":false}`} {
+			s := *a
+			wg.Add(1)
+			go func(s models.ExecutionStep, out string) {
+				defer wg.Done()
+				results <- e.CompleteStep(ctx, &s, out)
+			}(s, out)
+		}
+		wg.Wait()
+		close(results)
+		ok, conflict := 0, 0
+		for err := range results {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrStepConflict):
+				conflict++
+			default:
+				t.Fatal(err)
+			}
+		}
+		if ok != 1 || conflict != 1 {
+			t.Fatalf("want exactly one winner, got ok=%d conflict=%d", ok, conflict)
+		}
+		if n := len(stepsByNode(t, store, execID)["b"]); n != 1 {
+			t.Fatalf("child scheduled %d times", n)
+		}
+	}
+}
+
+func TestZombieWorkerCannotOverwrite(t *testing.T) {
+	e, store := newTestEngine(t)
+	ctx := context.Background()
+	_ = store.CreateExecutionStep(ctx, "ns", &models.ExecutionStep{ID: "s", ExecutionID: "x", NodeID: "a", Status: models.TaskRunning, WorkerID: "new-owner"})
+	stale := &models.ExecutionStep{ID: "s", Namespace: "ns", ExecutionID: "x", NodeID: "a", Status: models.TaskFailed, WorkerID: "old-owner"}
+	ok, err := e.updateStepIf(ctx, stale, models.TaskRunning, "old-owner")
+	if err != nil || ok {
+		t.Fatalf("stale owner must not write: ok=%v err=%v", ok, err)
+	}
+	steps, _ := store.GetExecutionSteps(ctx, "ns", "x")
+	if steps[0].Status != models.TaskRunning || steps[0].WorkerID != "new-owner" {
+		t.Fatalf("step overwritten: %+v", steps[0])
+	}
+}

@@ -74,13 +74,69 @@ func uniquePredecessors(g *Graph, nodeID string) []string {
 	return out
 }
 
-func edgeTaken(g *Graph, from, to, output string) bool {
-	for _, id := range g.GetNextNodesWithBranch(from, output) {
-		if id == to {
-			return true
-		}
+// PortsKey is the output envelope key used by port-aware executors:
+// {"__ports": {"0": <data>, "1": <data>}}. A port that is absent carries no
+// data, so edges leaving it are dead and their targets may be skipped.
+const PortsKey = "__ports"
+
+// PortInput is the data delivered to a node over one active incoming edge.
+type PortInput struct {
+	FromNode string          `json:"fromNode"`
+	FromPort string          `json:"fromPort"`
+	ToPort   int             `json:"toPort"`
+	Data     json.RawMessage `json:"data"`
+}
+
+// InputBuilder is implemented by executors that need per-edge input (e.g.
+// n8n Merge with two inputs). When implemented, the engine passes every
+// active incoming edge instead of its default aggregation, and does not merge
+// execution variables into the input.
+type InputBuilder interface {
+	BuildInput(inputs []PortInput) (string, error)
+}
+
+// parsedOutput caches the decoded routing view of a step output.
+type parsedOutput struct {
+	raw       string
+	ports     map[string]json.RawMessage
+	hasPorts  bool
+	branch    string
+	hasBranch bool
+}
+
+func parseOutput(output string) parsedOutput {
+	po := parsedOutput{raw: output}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(output), &m) != nil {
+		return po
 	}
-	return false
+	if raw, ok := m[PortsKey]; ok {
+		if json.Unmarshal(raw, &po.ports) == nil {
+			po.hasPorts = true
+		}
+		return po
+	}
+	if raw, ok := m["branch"]; ok {
+		po.hasBranch = json.Unmarshal(raw, &po.branch) == nil
+	}
+	return po
+}
+
+// edgeData reports whether edge e carries data for this output, and what.
+func edgeData(e models.Edge, po parsedOutput) (json.RawMessage, bool) {
+	switch {
+	case po.hasPorts:
+		key := e.Condition
+		if key == "" {
+			key = "0"
+		}
+		v, ok := po.ports[key]
+		return v, ok
+	case po.hasBranch:
+		return json.RawMessage(po.raw), e.Condition == po.branch
+	default:
+		return json.RawMessage(po.raw), e.Condition == ""
+	}
 }
 
 // advanceFrom resolves every direct child of nodeID after nodeID settled
@@ -116,7 +172,7 @@ func (e *Engine) resolveNode(ctx context.Context, exec *models.Execution, wf *mo
 	}
 
 	preds := uniquePredecessors(g, nodeID)
-	var active []string
+	parsed := make(map[string]parsedOutput, len(preds))
 	for _, p := range preds {
 		ps := byNode[p]
 		if ps == nil {
@@ -124,13 +180,34 @@ func (e *Engine) resolveNode(ctx context.Context, exec *models.Execution, wf *mo
 		}
 		switch ps.Status {
 		case models.TaskCompleted:
-			if edgeTaken(g, p, nodeID, ps.Output) {
-				active = append(active, p)
-			}
+			parsed[p] = parseOutput(ps.Output)
 		case models.TaskSkipped:
-			// dead edge
+			// dead edges
 		default:
 			return nil // not settled (or failed: downstream never runs)
+		}
+	}
+
+	// Collect active incoming edges in edge order.
+	var active []PortInput
+	activePreds := map[string]bool{}
+	for _, p := range preds {
+		po, ok := parsed[p]
+		if !ok {
+			continue
+		}
+		for _, e := range g.Edges[p] {
+			if e.TargetID != nodeID {
+				continue
+			}
+			if data, ok := edgeData(e, po); ok {
+				fromPort := e.Condition
+				if fromPort == "" && po.hasPorts {
+					fromPort = "0"
+				}
+				active = append(active, PortInput{FromNode: p, FromPort: fromPort, ToPort: e.TargetInput, Data: data})
+				activePreds[p] = true
+			}
 		}
 	}
 
@@ -153,22 +230,34 @@ func (e *Engine) resolveNode(ctx context.Context, exec *models.Execution, wf *mo
 		return e.advanceFrom(ctx, exec, wf, g, nodeID)
 	}
 
-	var base string
-	if len(preds) > 1 {
-		agg := make(map[string]interface{}, len(active))
-		for _, p := range active {
-			var out interface{}
-			_ = json.Unmarshal([]byte(byNode[p].Output), &out)
-			agg[p] = out
+	node := FindNode(wf, nodeID)
+	var input string
+	if builder := e.inputBuilderFor(node); builder != nil {
+		input, err = builder.BuildInput(active)
+		if err != nil {
+			return err
 		}
-		b, _ := json.Marshal(agg)
-		base = string(b)
 	} else {
-		base = byNode[active[0]].Output
+		var base string
+		if len(preds) > 1 {
+			agg := make(map[string]interface{}, len(activePreds))
+			for _, in := range active {
+				if _, done := agg[in.FromNode]; done {
+					continue
+				}
+				var out interface{}
+				_ = json.Unmarshal(in.Data, &out)
+				agg[in.FromNode] = out
+			}
+			b, _ := json.Marshal(agg)
+			base = string(b)
+		} else {
+			base = string(active[0].Data)
+		}
+		input = e.mergeVarsIntoInput(ctx, exec.Namespace, exec.ID, base)
 	}
-	input := e.mergeVarsIntoInput(ctx, exec.Namespace, exec.ID, base)
 
-	newStep := NewStepForNode(exec.Namespace, exec.ID, nodeID, input, FindNode(wf, nodeID))
+	newStep := NewStepForNode(exec.Namespace, exec.ID, nodeID, input, node)
 	newStep.ID = forwardStepID(exec.ID, nodeID)
 	created, err := e.createStep(ctx, exec.Namespace, newStep)
 	if err != nil || !created {
@@ -180,4 +269,16 @@ func (e *Engine) resolveNode(ctx context.Context, exec *models.Execution, wf *mo
 		})
 	}
 	return nil
+}
+
+func (e *Engine) inputBuilderFor(n *models.Node) InputBuilder {
+	if n == nil {
+		return nil
+	}
+	ex, err := e.registry.Get(n.Type)
+	if err != nil {
+		return nil
+	}
+	b, _ := ex.(InputBuilder)
+	return b
 }

@@ -3,6 +3,7 @@
 - Temel Kavramlar
   - [API Referansı](tr/api.md)
   - [Düğüm Tipleri](tr/nodes.md)
+  - [n8n Workflow'ları](tr/n8n.md)
 - Altyapı
   - [Veri Depolama](tr/storage.md)
   - [İleri Düzey Özellikler](tr/advanced.md)

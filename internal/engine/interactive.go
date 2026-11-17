@@ -58,20 +58,23 @@ func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action,
 			}
 		} else {
 			step.Input = merged
-			step.Status = models.TaskRunning
-			_ = e.storage.UpdateExecutionStep(ctx, namespace, step)
+			if err := e.claimForAdvance(ctx, step, models.TaskWaiting); err != nil {
+				return "", nil, err
+			}
 			executor, err := e.registry.Get(n.Type)
 			if err != nil {
 				return "", nil, err
 			}
 			ctx = WithExecutionContext(ctx, namespace, execID)
 			ctx = WithEngine(ctx, e)
-			out, execErr := executor.Execute(ctx, n.Config, merged)
+			out, execErr := safeExecute(ctx, executor, n.Config, merged)
 			if execErr != nil {
 				if execErr.Error() == WaitHuman || execErr.Error() == WaitSignal {
 					step.Status = models.TaskWaiting
 					ApplyHumanTaskConfig(step, n)
-					_ = e.storage.UpdateExecutionStep(ctx, namespace, step)
+					if err := e.saveAdvance(ctx, step); err != nil {
+						return "", nil, err
+					}
 					waiting, _ := e.storage.ListWaitingSteps(ctx, namespace, TaskFilter{ExecutionID: execID})
 					return merged, waiting, nil
 				}
@@ -79,7 +82,9 @@ func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action,
 				step.Error = execErr.Error()
 				now := time.Now()
 				step.FinishedAt = &now
-				_ = e.storage.UpdateExecutionStep(ctx, namespace, step)
+				if err := e.saveAdvance(ctx, step); err != nil {
+					return "", nil, err
+				}
 				return "", nil, execErr
 			}
 			output = out
@@ -97,8 +102,9 @@ func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action,
 		// Sync execute then complete
 		mergedInput := MergeActionPayload(step.Input, action, payload)
 		step.Input = mergedInput
-		step.Status = models.TaskRunning
-		_ = e.storage.UpdateExecutionStep(ctx, namespace, step)
+		if err := e.claimForAdvance(ctx, step, models.TaskPending); err != nil {
+			return "", nil, err
+		}
 
 		executor, err := e.registry.Get(n.Type)
 		if err != nil {
@@ -106,13 +112,13 @@ func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action,
 		}
 		ctx = WithExecutionContext(ctx, namespace, execID)
 		ctx = WithEngine(ctx, e)
-		out, execErr := executor.Execute(ctx, n.Config, mergedInput)
+		out, execErr := safeExecute(ctx, executor, n.Config, mergedInput)
 		if execErr != nil {
 			if execErr.Error() == WaitHuman || execErr.Error() == WaitSignal {
 				step.Status = models.TaskWaiting
 				ApplyHumanTaskConfig(step, n)
 				step.Action = action
-				if err := e.storage.UpdateExecutionStep(ctx, namespace, step); err != nil {
+				if err := e.saveAdvance(ctx, step); err != nil {
 					return "", nil, err
 				}
 				e.emit(ctx, Event{
@@ -126,7 +132,9 @@ func (e *Engine) Advance(ctx context.Context, namespace, execID, nodeID, action,
 			step.Error = execErr.Error()
 			now := time.Now()
 			step.FinishedAt = &now
-			_ = e.storage.UpdateExecutionStep(ctx, namespace, step)
+			if err := e.saveAdvance(ctx, step); err != nil {
+				return "", nil, err
+			}
 			return "", nil, execErr
 		}
 		output = out
@@ -182,8 +190,10 @@ func (e *Engine) ClaimTask(ctx context.Context, namespace, execID, nodeID, actor
 	now := time.Now()
 	step.ClaimedBy = actor
 	step.ClaimedAt = &now
-	if err := e.storage.UpdateExecutionStep(ctx, namespace, step); err != nil {
+	if ok, err := e.updateStepIf(ctx, step, models.TaskWaiting, ""); err != nil {
 		return err
+	} else if !ok {
+		return ErrStepConflict
 	}
 	exec, _ := e.storage.GetExecution(ctx, namespace, execID)
 	e.emit(ctx, Event{
@@ -210,7 +220,12 @@ func (e *Engine) ReleaseTask(ctx context.Context, namespace, execID, nodeID, act
 	}
 	step.ClaimedBy = ""
 	step.ClaimedAt = nil
-	return e.storage.UpdateExecutionStep(ctx, namespace, step)
+	if ok, err := e.updateStepIf(ctx, step, models.TaskWaiting, ""); err != nil {
+		return err
+	} else if !ok {
+		return ErrStepConflict
+	}
+	return nil
 }
 
 // CompleteTask claims (if needed) and advances a human task.
@@ -390,4 +405,43 @@ func (e *Engine) mergeVarsIntoInput(ctx context.Context, namespace, execID, base
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+// claimForAdvance moves a step to RUNNING for a synchronous Advance call,
+// only if it is still in the expected state (a worker may race for a
+// hybrid PENDING step). The step is owned by a unique pseudo-worker.
+func (e *Engine) claimForAdvance(ctx context.Context, step *models.ExecutionStep, from models.TaskStatus) error {
+	step.Status = models.TaskRunning
+	step.WorkerID = "interactive:" + uuid.NewString()
+	ok, err := e.updateStepIf(ctx, step, from, "")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrStepConflict
+	}
+	return nil
+}
+
+// saveAdvance persists a step claimed by claimForAdvance.
+func (e *Engine) saveAdvance(ctx context.Context, step *models.ExecutionStep) error {
+	ok, err := e.updateStepIf(ctx, step, models.TaskRunning, step.WorkerID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrStepConflict
+	}
+	return nil
+}
+
+// safeExecute converts executor panics into errors so a synchronous Advance
+// never leaves a step stuck in RUNNING.
+func safeExecute(ctx context.Context, ex NodeExecutor, cfg map[string]interface{}, input string) (out string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return ex.Execute(ctx, cfg, input)
 }

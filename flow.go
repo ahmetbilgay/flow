@@ -43,6 +43,7 @@ import (
 	"github.com/dgmos/flow/internal/builder"
 	"github.com/dgmos/flow/internal/engine"
 	"github.com/dgmos/flow/internal/models"
+	"github.com/dgmos/flow/internal/n8n"
 	"github.com/dgmos/flow/internal/node"
 	"github.com/dgmos/flow/internal/storage"
 	"github.com/dgmos/flow/internal/storage/memory"
@@ -63,6 +64,7 @@ type Engine struct {
 	*engine.Engine
 	CronManager *CronManager
 	registry    *Registry
+	n8nOpts     *n8n.Options
 }
 
 // WorkerOptions configures worker concurrency and polling.

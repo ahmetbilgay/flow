@@ -596,16 +596,25 @@ func (s *SQLStorage) GetExecution(ctx context.Context, namespace string, id stri
 }
 
 func (s *SQLStorage) UpdateExecution(ctx context.Context, namespace string, exec *models.Execution) error {
+	_, err := s.updateExec(ctx, namespace, exec, "")
+	return err
+}
+
+func (s *SQLStorage) updateExec(ctx context.Context, namespace string, exec *models.Execution, cond string, condArgs ...interface{}) (bool, error) {
 	output := exec.Output
 	if s.crypto != nil {
 		encryptedOutput, _ := s.crypto.Encrypt(output)
 		output = encryptedOutput
 	}
 	vars, _ := json.Marshal(exec.Variables)
-	q := s.ph(fmt.Sprintf(`UPDATE %s SET status = ?, output = ?, error_message = ?, finished_at = ?, variables = ? WHERE id = ? AND namespace = ?`, s.t("executions")))
-	_, err := s.db.ExecContext(ctx, q,
-		exec.Status, jsonColumnArg(output), exec.ErrorMessage, exec.FinishedAt, vars, exec.ID, namespace)
-	return err
+	q := s.ph(fmt.Sprintf(`UPDATE %s SET status = ?, output = ?, error_message = ?, finished_at = ?, variables = ? WHERE id = ? AND namespace = ?`+cond, s.t("executions")))
+	args := []interface{}{exec.Status, jsonColumnArg(output), exec.ErrorMessage, exec.FinishedAt, vars, exec.ID, namespace}
+	res, err := s.db.ExecContext(ctx, q, append(args, condArgs...)...)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func (s *SQLStorage) ListExecutions(ctx context.Context, namespace string) ([]*models.Execution, error) {
@@ -678,7 +687,28 @@ func (s *SQLStorage) HeartbeatStep(ctx context.Context, namespace, stepID, worke
 	return owned > 0, nil
 }
 
+// UpdateExecutionStepIf implements storage.ConditionalUpdater.
+func (s *SQLStorage) UpdateExecutionStepIf(ctx context.Context, namespace string, step *models.ExecutionStep, from models.TaskStatus, worker string) (bool, error) {
+	cond := " AND status = ?"
+	extra := []interface{}{string(from)}
+	if worker != "" {
+		cond += " AND worker_id = ?"
+		extra = append(extra, worker)
+	}
+	return s.updateStep(ctx, namespace, step, cond, extra...)
+}
+
+// UpdateExecutionIf implements storage.ConditionalUpdater.
+func (s *SQLStorage) UpdateExecutionIf(ctx context.Context, namespace string, exec *models.Execution, from models.TaskStatus) (bool, error) {
+	return s.updateExec(ctx, namespace, exec, " AND status = ?", string(from))
+}
+
 func (s *SQLStorage) UpdateExecutionStep(ctx context.Context, namespace string, step *models.ExecutionStep) error {
+	_, err := s.updateStep(ctx, namespace, step, "")
+	return err
+}
+
+func (s *SQLStorage) updateStep(ctx context.Context, namespace string, step *models.ExecutionStep, cond string, condArgs ...interface{}) (bool, error) {
 	output := step.Output
 	errStr := step.Error
 	if s.crypto != nil {
@@ -688,10 +718,14 @@ func (s *SQLStorage) UpdateExecutionStep(ctx context.Context, namespace string, 
 		errStr = eError
 	}
 	meta := encodeTaskMeta(step)
-	q := s.ph(fmt.Sprintf(`UPDATE %s SET status = ?, output = ?, error = ?, finished_at = ?, attempt_number = ?, scheduled_at = ?, updated_at = ?, worker_id = ?, task_meta = ? WHERE id = ? AND namespace = ?`, s.t("execution_steps")))
-	_, err := s.db.ExecContext(ctx, q,
-		step.Status, jsonColumnArg(output), errStr, step.FinishedAt, step.AttemptNumber, step.ScheduledAt, time.Now(), step.WorkerID, meta, step.ID, namespace)
-	return err
+	q := s.ph(fmt.Sprintf(`UPDATE %s SET status = ?, output = ?, error = ?, finished_at = ?, attempt_number = ?, scheduled_at = ?, updated_at = ?, worker_id = ?, task_meta = ? WHERE id = ? AND namespace = ?`+cond, s.t("execution_steps")))
+	args := []interface{}{step.Status, jsonColumnArg(output), errStr, step.FinishedAt, step.AttemptNumber, step.ScheduledAt, time.Now(), step.WorkerID, meta, step.ID, namespace}
+	res, err := s.db.ExecContext(ctx, q, append(args, condArgs...)...)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func (s *SQLStorage) mapStep(row *stepRow) *models.ExecutionStep {

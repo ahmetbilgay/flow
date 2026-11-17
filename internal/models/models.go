@@ -71,10 +71,16 @@ type Node struct {
 
 // Edge represents a connection between two nodes
 type Edge struct {
-	ID        string `json:"id"`
-	SourceID  string `json:"sourceId"`
-	TargetID  string `json:"targetId"`
+	ID       string `json:"id"`
+	SourceID string `json:"sourceId"`
+	TargetID string `json:"targetId"`
+	// Condition selects the source output: a branch name for classic nodes
+	// ({"branch": "..."} outputs) or an output port key for port-aware nodes
+	// ({"__ports": {"0": ..., "1": ...}} outputs; "" means port "0").
 	Condition string `json:"condition,omitempty"`
+	// TargetInput is the input port of the target node (0-based). Only
+	// port-aware executors (engine.InputBuilder) use it, e.g. Merge inputs.
+	TargetInput int `json:"targetInput,omitempty"`
 }
 
 // Execution represents a single run instance of a workflow

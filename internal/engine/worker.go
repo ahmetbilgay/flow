@@ -86,6 +86,7 @@ func (w *Worker) Start(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		reapTicker := time.NewTicker(30 * time.Second)
+		reaps := 0
 		defer reapTicker.Stop()
 		for {
 			select {
@@ -94,6 +95,11 @@ func (w *Worker) Start(ctx context.Context) {
 			case <-reapTicker.C:
 				if err := w.engine.ReapTimeouts(ctx, w.namespace); err != nil && ctx.Err() == nil {
 					w.engine.logger.Error("Timeout reaper failed", "worker", w.id, "error", err)
+				}
+				if reaps++; reaps%10 == 0 {
+					if _, err := w.engine.SweepStuckExecutions(ctx, w.namespace, 5*time.Minute); err != nil && ctx.Err() == nil {
+						w.engine.logger.Error("Stuck execution sweep failed", "worker", w.id, "error", err)
+					}
 				}
 			}
 		}
@@ -162,7 +168,7 @@ func (w *Worker) process(runCtx context.Context, step *models.ExecutionStep) {
 			step.Error = fmt.Sprintf("Panic: %v", r)
 			now := time.Now()
 			step.FinishedAt = &now
-			_ = w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step)
+			_ = w.saveOwned(ctx, step)
 			_ = w.engine.failExecution(ctx, step.Namespace, step.ExecutionID, step.Error)
 		}
 	}()
@@ -172,42 +178,63 @@ func (w *Worker) process(runCtx context.Context, step *models.ExecutionStep) {
 		w.failStepHard(ctx, step, fmt.Errorf("load execution: %w", err))
 		return
 	}
-	if exec.Status == models.TaskCancelled {
-		w.engine.logger.Warn("Step skipped due to cancellation", "worker", w.id, "step", step.ID, "execution", exec.ID)
-		step.Status = models.TaskCancelled
-		now := time.Now()
-		step.FinishedAt = &now
-		if err := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); err != nil {
-			w.engine.logger.Error("Failed to update execution step for cancellation", "worker", w.id, "step", step.ID, "error", err)
-		}
-		return
-	}
 	wf, err := w.engine.storage.GetWorkflow(ctx, step.Namespace, exec.WorkflowID)
 	if err != nil {
 		w.failStepHard(ctx, step, fmt.Errorf("load workflow: %w", err))
 		return
 	}
+	// Compensation steps (saga / RollbackTo) may run after the execution
+	// finished; nothing else may.
+	if exec.Status != models.TaskRunning && !isCompensationNode(wf, step.NodeID) {
+		// Cancelled, failed or already finished: never run more steps.
+		w.engine.logger.Warn("Step skipped: execution is not running", "worker", w.id, "step", step.ID, "execution", exec.ID, "status", exec.Status)
+		step.Status = models.TaskCancelled
+		now := time.Now()
+		step.FinishedAt = &now
+		if err := w.saveOwned(ctx, step); err != nil {
+			w.engine.logger.Error("Failed to update execution step for cancellation", "worker", w.id, "step", step.ID, "error", err)
+		}
+		return
+	}
 
 	w.engine.logger.Info("Processing step", "worker", w.id, "step", step.ID, "node", step.NodeID, "namespace", step.Namespace)
 
-	stopHeartbeat := w.startHeartbeat(ctx, step)
+	execCtx, cancelExec := context.WithCancel(runCtx)
+	stopHeartbeat := w.startHeartbeat(ctx, step, cancelExec)
 	start := time.Now()
-	output, err := w.executeStep(runCtx, step, exec, wf)
+	output, err := w.executeStep(execCtx, step, exec, wf)
 	duration := time.Since(start)
 	stopHeartbeat()
+	cancelExec()
 
 	nodeType := "unknown"
 	if n := FindNode(wf, step.NodeID); n != nil {
 		nodeType = n.Type
 	}
 
-	if err != nil && runCtx.Err() != nil {
+	var timer *WaitUntilError
+	if errors.As(err, &timer) {
+		// Durable timer: free the worker; the reaper resumes the step.
+		at := timer.At
+		step.Status = models.TaskWaiting
+		step.DueAt = &at
+		step.Action = timerAction
+		step.Output = timer.Output
+		if uerr := w.saveOwned(ctx, step); uerr != nil {
+			w.engine.logger.Error("Failed to store timer wait", "worker", w.id, "step", step.ID, "error", uerr)
+		}
+		w.engine.emit(ctx, Event{Type: EventTypeStepWaitingSignal, Namespace: step.Namespace, Execution: exec, Step: step, Workflow: wf})
+		GetTelemetry().IncProcessed(step.Namespace, nodeType, "waiting")
+		return
+	}
+	isWait := err != nil && (err.Error() == WaitSignal || err.Error() == WaitHuman)
+	if err != nil && !isWait && runCtx.Err() != nil {
 		// Worker is shutting down: hand the step back without using a retry.
 		w.engine.logger.Info("Releasing step on shutdown", "worker", w.id, "step", step.ID)
 		step.Status = models.TaskPending
 		step.WorkerID = ""
 		step.ScheduledAt = nil
-		if uerr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); uerr != nil {
+		if uerr := w.saveOwned(ctx, step); uerr != nil {
 			w.engine.logger.Error("Failed to release step", "worker", w.id, "step", step.ID, "error", uerr)
 		}
 		return
@@ -220,7 +247,7 @@ func (w *Worker) process(runCtx context.Context, step *models.ExecutionStep) {
 			w.engine.logger.Info("Step entering WAITING state", "worker", w.id, "step", step.ID, "node", step.NodeID, "reason", waitReason)
 			step.Status = models.TaskWaiting
 			ApplyHumanTaskConfig(step, FindNode(wf, step.NodeID))
-			if updErr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); updErr != nil {
+			if updErr := w.saveOwned(ctx, step); updErr != nil {
 				w.engine.logger.Error("Failed to update execution step to WAITING state", "worker", w.id, "step", step.ID, "error", updErr)
 			}
 			evType := EventTypeStepWaitingSignal
@@ -248,7 +275,7 @@ func (w *Worker) process(runCtx context.Context, step *models.ExecutionStep) {
 
 			w.engine.logger.Info("Rescheduling step with dynamic backoff", "worker", w.id, "step", step.ID, "next_run", nextScheduled.Format(time.RFC3339))
 			GetTelemetry().IncProcessed(step.Namespace, nodeType, "retried")
-			if err := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); err != nil {
+			if err := w.saveOwned(ctx, step); err != nil {
 				w.engine.logger.Error("Failed to update execution step for retry", "worker", w.id, "step", step.ID, "error", err)
 			}
 			return
@@ -265,7 +292,7 @@ func (w *Worker) process(runCtx context.Context, step *models.ExecutionStep) {
 		step.FinishedAt = &now
 		GetTelemetry().IncProcessed(step.Namespace, nodeType, "failed")
 		GetTelemetry().ObserveDuration(step.Namespace, nodeType, duration)
-		if err := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); err != nil {
+		if err := w.saveOwned(ctx, step); err != nil {
 			w.engine.logger.Error("Failed to update execution step after max retries", "worker", w.id, "step", step.ID, "error", err)
 		}
 
@@ -329,7 +356,7 @@ var heartbeatInterval = 30 * time.Second
 
 // startHeartbeat renews the step lease until the returned stop func is called,
 // so long-running steps are not reclaimed and executed twice by another worker.
-func (w *Worker) startHeartbeat(ctx context.Context, step *models.ExecutionStep) func() {
+func (w *Worker) startHeartbeat(ctx context.Context, step *models.ExecutionStep, onLost func()) func() {
 	hb, ok := w.engine.storage.(storage.StepHeartbeater)
 	if !ok {
 		return func() {}
@@ -352,7 +379,11 @@ func (w *Worker) startHeartbeat(ctx context.Context, step *models.ExecutionStep)
 				if err != nil {
 					w.engine.logger.Warn("Step heartbeat failed", "worker", w.id, "step", step.ID, "error", err)
 				} else if !owned {
-					w.engine.logger.Warn("Step lease lost", "worker", w.id, "step", step.ID)
+					// Another worker reclaimed the step: stop executing; our
+					// result would be discarded anyway.
+					w.engine.logger.Warn("Step lease lost; cancelling execution", "worker", w.id, "step", step.ID)
+					onLost()
+					return
 				}
 			}
 		}
@@ -370,7 +401,7 @@ func (w *Worker) failStepHard(ctx context.Context, step *models.ExecutionStep, e
 	step.Error = err.Error()
 	now := time.Now()
 	step.FinishedAt = &now
-	if uerr := w.engine.storage.UpdateExecutionStep(ctx, step.Namespace, step); uerr != nil {
+	if uerr := w.saveOwned(ctx, step); uerr != nil {
 		w.engine.logger.Error("Failed to update step", "worker", w.id, "step", step.ID, "error", uerr)
 	}
 	_ = w.engine.failExecution(ctx, step.Namespace, step.ExecutionID, step.Error)
@@ -410,6 +441,7 @@ func (w *Worker) handleCompensation(ctx context.Context, wf *models.Workflow, st
 			}
 			if _, err := w.engine.createStep(ctx, step.Namespace, compStep); err != nil {
 				w.engine.logger.Error("Failed to create compensation step", "execution", exec.ID, "step", compStep.ID, "error", err)
+				return false // let the execution fail instead of hanging
 			}
 			return true
 		}
@@ -478,3 +510,26 @@ type invalidConfigError string
 
 func (e invalidConfigError) Error() string   { return string(e) }
 func (e invalidConfigError) Permanent() bool { return true }
+
+// saveOwned writes a step this worker claimed, only if it is still RUNNING
+// and owned by this worker. A reclaimed (zombie) step's late result is
+// discarded instead of overwriting the new owner's.
+func (w *Worker) saveOwned(ctx context.Context, step *models.ExecutionStep) error {
+	ok, err := w.engine.updateStepIf(ctx, step, models.TaskRunning, w.id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		w.engine.logger.Warn("Discarding result: step is no longer owned by this worker", "worker", w.id, "step", step.ID)
+	}
+	return nil
+}
+
+func isCompensationNode(wf *models.Workflow, nodeID string) bool {
+	for _, n := range wf.Nodes {
+		if n.CompensateNodeID == nodeID {
+			return true
+		}
+	}
+	return false
+}

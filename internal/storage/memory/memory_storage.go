@@ -415,3 +415,32 @@ func cloneSchedule(sched *models.Schedule) *models.Schedule {
 	}
 	return &copy
 }
+
+// UpdateExecutionStepIf implements storage.ConditionalUpdater.
+func (s *MemoryStorage) UpdateExecutionStepIf(ctx context.Context, namespace string, step *models.ExecutionStep, from models.TaskStatus, worker string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := fmt.Sprintf("%s:%s", namespace, step.ID)
+	cur, ok := s.executionSteps[key]
+	if !ok || cur.Status != from || worker != "" && cur.WorkerID != worker {
+		return false, nil
+	}
+	step.UpdatedAt = time.Now()
+	stepCopy := *step
+	s.executionSteps[key] = &stepCopy
+	return true, nil
+}
+
+// UpdateExecutionIf implements storage.ConditionalUpdater.
+func (s *MemoryStorage) UpdateExecutionIf(ctx context.Context, namespace string, exec *models.Execution, from models.TaskStatus) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := fmt.Sprintf("%s:%s", namespace, exec.ID)
+	cur, ok := s.executions[key]
+	if !ok || cur.Status != from {
+		return false, nil
+	}
+	execCopy := *exec
+	s.executions[key] = &execCopy
+	return true, nil
+}

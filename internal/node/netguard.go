@@ -96,11 +96,31 @@ func newGuard(p OutboundPolicy) *guard {
 
 var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
 
+// IPv6 transition ranges that embed (possibly private) IPv4 addresses.
+var transitionNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range []string{"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32"} {
+		_, n, _ := net.ParseCIDR(c)
+		out = append(out, n)
+	}
+	return out
+}()
+
+var safeRedirectHeaders = map[string]bool{
+	"Accept": true, "Accept-Encoding": true, "Accept-Language": true, "User-Agent": true,
+	"Content-Type": true, "Content-Length": true, "Referer": true,
+}
+
 // isPublicIP reports whether ip is a globally routable unicast address.
 func isPublicIP(ip net.IP) bool {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 		if v4[0] == 0 || cgnat.Contains(v4) || v4.Equal(net.IPv4bcast) {
+			return false
+		}
+	}
+	for _, n := range transitionNets {
+		if n.Contains(ip) {
 			return false
 		}
 	}
@@ -170,6 +190,15 @@ func newClient(p OutboundPolicy) *http.Client {
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
+			// Go only drops Authorization/Cookie on cross-host redirects;
+			// also drop custom credential headers (X-API-Key, apikey, …).
+			if req.URL.Host != via[0].URL.Host {
+				for k := range req.Header {
+					if !safeRedirectHeaders[http.CanonicalHeaderKey(k)] {
+						req.Header.Del(k)
+					}
+				}
+			}
 			return checkScheme(req.URL)
 		},
 	}
@@ -197,4 +226,34 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 		return nil, &policyError{kind: ErrResponseTooLarge, detail: fmt.Sprintf("limit %d bytes", limit)}
 	}
 	return b, nil
+}
+
+// NewOutboundClient returns an HTTP client that enforces the policy on every
+// connection (for other node packages that make outbound requests).
+func NewOutboundClient(p OutboundPolicy) *http.Client { return newClient(p) }
+
+// MaxResponseBytes returns the effective response cap of a policy
+// (negative = unlimited).
+func (p OutboundPolicy) MaxResponseBytesOrDefault() int64 { return p.maxBytes() }
+
+// ReadLimited reads at most limit bytes (limit < 0: unlimited) and fails with
+// ErrResponseTooLarge beyond that.
+func ReadLimited(r io.Reader, limit int64) ([]byte, error) { return readLimited(r, limit) }
+
+// CheckScheme rejects non-http(s) URLs with ErrDestinationBlocked.
+func CheckScheme(u *url.URL) error { return checkScheme(u) }
+
+// NewOutboundDialer returns a dial function that enforces the policy (for
+// non-HTTP protocols such as SMTP).
+func NewOutboundDialer(p OutboundPolicy) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	g := newGuard(p)
+	guarded := &net.Dialer{Timeout: 15 * time.Second, Control: g.control}
+	open := &net.Dialer{Timeout: 15 * time.Second}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err == nil && g.hosts[strings.ToLower(host)] {
+			return open.DialContext(ctx, network, addr)
+		}
+		return guarded.DialContext(ctx, network, addr)
+	}
 }
