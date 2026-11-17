@@ -353,6 +353,16 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, t routeTarget,
 			items := lastNodeItems(wf, steps)
 			if t.kind == "chat" {
 				out := map[string]interface{}{"output": ""}
+				if msgs := chatMessages(steps); len(msgs) > 0 {
+					// Respond to Chat nodes: each message, and all of them as output.
+					parts := make([]string, len(msgs))
+					for k, m := range msgs {
+						parts[k] = toString(m)
+					}
+					out["output"], out["messages"] = strings.Join(parts, "\n\n"), msgs
+					writeJSON(w, http.StatusOK, out)
+					return
+				}
 				if len(items) > 0 {
 					for _, k := range []string{"output", "text", "response"} {
 						if v, ok := items[0].JSON[k]; ok {
@@ -392,6 +402,26 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, t routeTarget,
 			}
 		}
 	}
+}
+
+// chatMessages collects the messages of Respond to Chat nodes in the order
+// their steps finished.
+func chatMessages(steps []*models.ExecutionStep) []interface{} {
+	var done []*models.ExecutionStep
+	for _, s := range steps {
+		if s.Status == models.TaskCompleted && strings.Contains(s.Output, chatMessagesKey) {
+			done = append(done, s)
+		}
+	}
+	sort.SliceStable(done, func(a, b int) bool { return finishedLater(done[b], done[a]) })
+	var out []interface{}
+	for _, s := range done {
+		var env map[string]interface{}
+		if json.Unmarshal([]byte(s.Output), &env) == nil {
+			out = append(out, asList(env[chatMessagesKey])...)
+		}
+	}
+	return out
 }
 
 // lastNodeItems returns the output of the node that finished last with data.

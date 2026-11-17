@@ -72,6 +72,14 @@ func TestCorpus(t *testing.T) {
 			}
 		}
 		perTemplate = append(perTemplate, seen)
+		if os.Getenv("N8N_CORPUS_VERBOSE") != "" {
+			keys := make([]string, 0, len(seen))
+			for k := range seen {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			t.Logf("blocked %s: %v", filepath.Base(f), keys)
+		}
 	}
 	// Greedy: which blockers, once fixed, unlock the most templates.
 	fixed := map[string]bool{}
@@ -112,7 +120,7 @@ func TestCorpus(t *testing.T) {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].v > list[j].v })
 	for i, r := range list {
-		if i >= 40 {
+		if i >= 40 && os.Getenv("N8N_CORPUS_VERBOSE") == "" {
 			break
 		}
 		t.Logf("%4d  %s", r.v, r.k)

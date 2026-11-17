@@ -467,10 +467,36 @@ var unsupportedExpr = []struct {
 	re  *regexp.Regexp
 	msg string
 }{
-	{regexp.MustCompile(`this\.helpers\b`), "this.helpers (HTTP from Code) is not supported"},
-	{regexp.MustCompile(`\brequire\s*\(`), "require() is not available"},
 	{regexp.MustCompile(`\$secrets\b`), "$secrets is not supported"},
 	{regexp.MustCompile(`\$evaluateExpression\b`), "$evaluateExpression is not supported"},
+}
+
+var (
+	requireRe = regexp.MustCompile(`\brequire\s*\(\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`]*)`" + `)?`)
+	helpersRe = regexp.MustCompile(`\bhelpers\s*\.\s*([A-Za-z_$][\w$]*)`)
+	// Code node modules and this.helpers methods we provide.
+	codeModules = map[string]bool{"crypto": true, "node:crypto": true, "util": true, "node:util": true}
+	codeHelpers = map[string]bool{"httpRequest": true, "request": true, "prepareBinaryData": true, "getBinaryDataBuffer": true, "binaryToBuffer": true, "returnJsonArray": true}
+)
+
+// codeFeatureIssues reports require() modules and this.helpers methods a
+// Code node uses that are not available.
+func codeFeatureIssues(code string) []string {
+	var out []string
+	for _, m := range requireRe.FindAllStringSubmatch(code, -1) {
+		name := m[1] + m[2] + m[3]
+		if name == "" {
+			out = append(out, "require() with a computed module name is not available")
+		} else if !codeModules[name] {
+			out = append(out, fmt.Sprintf("require('%s') is not available (crypto and util are)", name))
+		}
+	}
+	for _, m := range helpersRe.FindAllStringSubmatch(code, -1) {
+		if !codeHelpers[m[1]] {
+			out = append(out, fmt.Sprintf("this.helpers.%s is not available in Code nodes", m[1]))
+		}
+	}
+	return out
 }
 
 func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Report) {
@@ -541,7 +567,13 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 	case "googleSheets":
 		if n.TypeVersion < 4 {
-			rep.block(n, "Google Sheets v%v is not supported (v4+ is)", n.TypeVersion)
+			if _, err := sheetsLegacyParams(params, float64(n.TypeVersion)); err != nil {
+				rep.block(n, "%s", err.Error())
+			}
+		}
+	case "chat":
+		if toBool(get("waitUserReply")) {
+			rep.block(n, "Respond to Chat waiting for the user's reply is not supported")
 		}
 	case "youTube":
 		r, o := toString(get("resource")), toString(get("operation"))
@@ -564,8 +596,8 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 			rep.block(n, "shared drive management is not supported")
 		}
 	case "vectorStoreInMemory", "vectorStoreQdrant", "vectorStorePinecone", "vectorStoreSupabase":
-		if m := toString(get("mode")); m == "update" {
-			rep.block(n, "vector store update mode is not supported")
+		if m := toString(get("mode")); m == "update" && short(n.Type) == "vectorStoreInMemory" {
+			rep.block(n, "the in-memory vector store has no document IDs to update")
 		}
 		if short(n.Type) == "vectorStoreInMemory" {
 			rep.warn(n, "the in-memory vector store lives in process memory (lost on restart, not shared between instances)")
@@ -573,16 +605,14 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 	case "readWriteFile", "readBinaryFile", "writeBinaryFile":
 		rep.warn(n, "file access requires Options.FileSystemRoot (a sandbox directory)")
 	case "mySql":
-		if op := toString(get("operation")); op != "executeQuery" {
-			rep.block(n, "MySQL operation %q is not supported (executeQuery is)", op)
+		switch op := toString(get("operation")); op {
+		case "", "executeQuery", "insert", "update", "upsert", "select", "deleteTable":
+		default:
+			rep.block(n, "MySQL operation %q is not supported", op)
 		}
 	case "spreadsheetFile":
 		if f := toString(get("fileFormat")); toString(get("operation")) == "toFile" && f != "" && f != "csv" && f != "xlsx" {
 			rep.block(n, "writing Spreadsheet File format %q is not supported (csv and xlsx are)", f)
-		}
-	case "chainSummarization":
-		if toString(get("operationMode")) == "documentLoader" {
-			rep.block(n, "summarization with a document loader is not supported")
 		}
 	case "extractFromFile":
 		if op := toString(get("operation")); op == "rtf" {
@@ -641,6 +671,12 @@ func checkExpressions(n *rawNode, params map[string]interface{}, rep *Report) {
 				if code != "" && u.re.MatchString(code) && !reported[u.msg] {
 					reported[u.msg] = true
 					rep.block(n, "%s", u.msg)
+				}
+			}
+			for _, msg := range codeFeatureIssues(code) {
+				if !reported[msg] {
+					reported[msg] = true
+					rep.block(n, "%s", msg)
 				}
 			}
 		case map[string]interface{}:

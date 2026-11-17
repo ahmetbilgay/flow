@@ -20,6 +20,7 @@ import (
 
 	"github.com/dlclark/regexp2"
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
 	"github.com/jmespath/go-jmespath"
 
 	"github.com/dgmos/flow/internal/models"
@@ -231,6 +232,42 @@ func (r *Runtime) installHost() error {
 			}
 			return string(b)
 		},
+		"__httpRequest": func(opts string) string {
+			out, err := r.codeHTTPRequest(opts)
+			if err != nil {
+				r.throw("%v", err)
+			}
+			return out
+		},
+		"__binaryData": func(b64, name, mt string) string {
+			data, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				r.throw("prepareBinaryData: invalid data")
+			}
+			if mt == "" {
+				mt = mimeByExt(name)
+				if mt == "application/octet-stream" {
+					mt = sniffMime(data)
+				}
+			}
+			return mustJSON(binaryData(data, mt, name))
+		},
+		"__digest": func(alg, key, chunks string, isHMAC bool) string {
+			out, err := codeDigest(alg, key, chunks, isHMAC)
+			if err != nil {
+				r.throw("%v", err)
+			}
+			return out
+		},
+		"__uuid": func() string { return uuid.NewString() },
+		"__randomB64": func(n int) string {
+			out, err := randomB64(n)
+			if err != nil {
+				r.throw("%v", err)
+			}
+			return out
+		},
+		"__randomFloat": randomFloat,
 		"__b64norm": func(s string) string {
 			b, err := decodeB64(s)
 			if err != nil {

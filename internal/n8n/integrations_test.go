@@ -423,3 +423,49 @@ func TestGoogleDriveV1V2(t *testing.T) {
 		t.Fatal("unsupported v1 operation must be reported")
 	}
 }
+
+// Google Sheets v1 (sheetId + range, key column) and v3 (dataMode/fieldsUi)
+// run on the v4 implementation.
+func TestGoogleSheetsLegacyVersions(t *testing.T) {
+	f := newFakeAPI(t, func(r recorded) (int, string, interface{}) {
+		switch {
+		case r.method == "GET" && strings.HasSuffix(r.path, "/spreadsheets/DOC1"):
+			return 200, "application/json", map[string]interface{}{"sheets": []interface{}{map[string]interface{}{"properties": map[string]interface{}{"sheetId": 0, "title": "Leads"}}}}
+		case r.method == "GET" && strings.Contains(r.path, "/values/"):
+			return 200, "application/json", map[string]interface{}{"values": []interface{}{
+				[]interface{}{"id", "name", "status"},
+				[]interface{}{"1", "Ann", "new"},
+				[]interface{}{"2", "Bob", "won"},
+			}}
+		}
+		return 200, "application/json", map[string]interface{}{}
+	})
+	h := integrationHarness(t, f.srv.URL)
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		credNode(nd("Lookup", "googleSheets", 1, map[string]interface{}{"operation": "lookup", "sheetId": "DOC1", "range": "Leads!A:C", "lookupColumn": "name", "lookupValue": "Bob", "authentication": "oAuth2"}), "googleSheetsOAuth2Api"),
+		credNode(nd("Upsert", "googleSheets", 2, map[string]interface{}{"operation": "upsert", "sheetId": "DOC1", "range": "A:C", "key": "id"}), "googleSheetsOAuth2Api"),
+		credNode(nd("Update v3", "googleSheets", 3, map[string]interface{}{"operation": "update", "documentId": map[string]interface{}{"__rl": true, "mode": "id", "value": "DOC1"},
+			"sheetName": map[string]interface{}{"__rl": true, "mode": "list", "value": "gid=0"}, "columnToMatchOn": "id", "valueToMatchOn": "1",
+			"fieldsUi": map[string]interface{}{"values": []interface{}{map[string]interface{}{"column": "status", "fieldValue": "={{ $json.status }}-v3"}}}}), "googleSheetsOAuth2Api"),
+	}, "Start->Lookup", "Lookup->Upsert", "Upsert->Update v3")
+	_, rep, _ := Import(data, ImportOptions{})
+	if !rep.Runnable {
+		t.Fatalf("not runnable: %+v", rep.Blocking)
+	}
+	_, steps := h.run(t, data, "")
+	if got := itemsOf(t, steps["Lookup"], 0); len(got) != 1 || got[0]["id"] != "2" {
+		t.Fatalf("v1 lookup: %v", got)
+	}
+	f.mu.Lock()
+	var bodies []string
+	for _, r := range f.reqs {
+		if r.method == "POST" && strings.Contains(r.path, "values:batchUpdate") {
+			bodies = append(bodies, r.body)
+		}
+	}
+	f.mu.Unlock()
+	if len(bodies) != 2 || !strings.Contains(bodies[0], `["2","Bob","won"]`) || !strings.Contains(bodies[1], `"'Leads'!A2"`) || !strings.Contains(bodies[1], "won-v3") {
+		t.Fatalf("v2 upsert / v3 update requests: %v", bodies)
+	}
+}

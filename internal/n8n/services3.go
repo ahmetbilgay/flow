@@ -565,7 +565,7 @@ func mysqlNode(ec *execCtx) ([][]Item, error) {
 	return eachItem(ec, func(i int, it Item) ([]Item, error) {
 		op, _ := ec.str(i, "operation", "insert")
 		if op != "executeQuery" {
-			return nil, permanentError{fmt.Sprintf("MySQL: operation %q is not supported (executeQuery is)", op)}
+			return mysqlOperation(ec, db, i, it, op)
 		}
 		q, err := ec.str(i, "query", "")
 		if err != nil {
@@ -860,4 +860,126 @@ func readWriteFileNode(ec *execCtx) ([][]Item, error) {
 		}
 		return out, nil
 	})
+}
+
+func myIdent(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }
+
+// mysqlOperation implements the MySQL node's table operations: v1 insert
+// and update (comma-separated columns, update key) and v2 insert, update,
+// upsert, select and deleteTable (column mapping, where conditions).
+func mysqlOperation(ec *execCtx, db *sql.DB, i int, it Item, op string) ([]Item, error) {
+	table, _ := ec.rlString(i, "table")
+	if table == "" {
+		return nil, permanentError{"MySQL: table is empty"}
+	}
+	tbl := myIdent(table)
+	ph := func(int) string { return "?" }
+	exec := func(q string, args ...interface{}) ([]Item, error) {
+		res, err := db.ExecContext(ec.ctx, q, args...)
+		if err != nil {
+			return nil, permanentError{"mysql: " + err.Error()}
+		}
+		affected, _ := res.RowsAffected()
+		id, _ := res.LastInsertId()
+		return one(map[string]interface{}{"affectedRows": float64(affected), "insertId": float64(id)}), nil
+	}
+	data := map[string]interface{}{}
+	var match []string
+	if ec.version < 2 {
+		cols, _ := ec.str(i, "columns", "")
+		for _, c := range splitList(cols) {
+			data[c] = it.JSON[c]
+		}
+		if op == "update" {
+			key, _ := ec.str(i, "updateKey", "id")
+			data[key] = it.JSON[key]
+			match = []string{key}
+		}
+	} else {
+		data = pgColumns(ec, i, it)
+		mv, _ := ec.param(i, "columns.matchingColumns", nil)
+		for _, m := range asList(mv) {
+			match = append(match, toString(m))
+		}
+		if k, _ := ec.str(i, "columnToMatchOn", ""); k != "" && len(match) == 0 {
+			match = []string{k}
+		}
+	}
+	switch op {
+	case "select":
+		q := "SELECT * FROM " + tbl
+		where, args := sqlWhere(ec, i, myIdent, ph)
+		q += where
+		if all, _ := ec.boolean(i, "returnAll", false); !all {
+			limit, _ := ec.num(i, "limit", 50)
+			q += fmt.Sprintf(" LIMIT %d", int(limit))
+		}
+		return pgQuery(ec, db, q, args...)
+	case "deleteTable":
+		switch cmd, _ := ec.str(i, "deleteCommand", "truncate"); cmd {
+		case "delete":
+			where, args := sqlWhere(ec, i, myIdent, ph)
+			return exec("DELETE FROM "+tbl+where, args...)
+		case "drop":
+			return exec("DROP TABLE IF EXISTS " + tbl)
+		default:
+			return exec("TRUNCATE TABLE " + tbl)
+		}
+	case "insert", "update", "upsert":
+	default:
+		return nil, permanentError{fmt.Sprintf("MySQL: operation %q is not supported", op)}
+	}
+	if len(data) == 0 {
+		return nil, permanentError{"MySQL: no columns to write"}
+	}
+	cols := make([]string, 0, len(data))
+	for k := range data {
+		cols = append(cols, k)
+	}
+	sortStrings(cols)
+	isMatch := map[string]bool{}
+	for _, m := range match {
+		isMatch[m] = true
+	}
+	switch op {
+	case "insert", "upsert":
+		var quoted, phs, sets []string
+		var args []interface{}
+		for _, k := range cols {
+			quoted, phs = append(quoted, myIdent(k)), append(phs, "?")
+			args = append(args, pgValue(data[k]))
+			if !isMatch[k] {
+				sets = append(sets, myIdent(k)+"=VALUES("+myIdent(k)+")")
+			}
+		}
+		verb := "INSERT"
+		if ig, _ := ec.boolean(i, "options.ignore", false); ig {
+			verb = "INSERT IGNORE"
+		}
+		q := fmt.Sprintf("%s INTO %s (%s) VALUES (%s)", verb, tbl, strings.Join(quoted, ","), strings.Join(phs, ","))
+		if op == "upsert" {
+			if len(match) == 0 || len(sets) == 0 {
+				return nil, permanentError{"MySQL upsert: no column to match on"}
+			}
+			q += " ON DUPLICATE KEY UPDATE " + strings.Join(sets, ",")
+		}
+		return exec(q, args...)
+	default: // update
+		if len(match) == 0 {
+			return nil, permanentError{"MySQL update: no column to match on"}
+		}
+		var sets, conds []string
+		var setArgs, condArgs []interface{}
+		for _, k := range cols {
+			if isMatch[k] {
+				conds, condArgs = append(conds, myIdent(k)+"=?"), append(condArgs, pgValue(data[k]))
+			} else {
+				sets, setArgs = append(sets, myIdent(k)+"=?"), append(setArgs, pgValue(data[k]))
+			}
+		}
+		if len(sets) == 0 {
+			return nil, permanentError{"MySQL update: no columns to update"}
+		}
+		return exec(fmt.Sprintf("UPDATE %s SET %s WHERE %s", tbl, strings.Join(sets, ","), strings.Join(conds, " AND ")), append(setArgs, condArgs...)...)
+	}
 }

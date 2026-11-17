@@ -491,6 +491,95 @@
   g.btoa = function (s) { return __b64enc(String(s)); };
   g.atob = function (s) { return __b64dec(String(s)); };
 
+  // ---------------------------------------------------------------- Code node helpers & modules
+  function bufB64(v, enc) {
+    if (v instanceof Buf) return v.__b64;
+    enc = (enc || 'utf8').toLowerCase();
+    if (enc === 'base64') return __b64norm(String(v));
+    if (enc === 'hex') return __hexb64(String(v));
+    return __b64enc(String(v));
+  }
+  function promised(fn) {
+    return function () {
+      var self = this, args = arguments;
+      return new Promise(function (res, rej) { try { res(fn.apply(self, args)); } catch (e) { rej(e); } });
+    };
+  }
+  function httpRequest(opts) {
+    if (typeof opts === 'string') opts = { url: opts };
+    opts = Object.assign({}, opts || {});
+    if (opts.uri && !opts.url) opts.url = opts.uri;
+    if (opts.body instanceof Buf) { opts.__bodyB64 = opts.body.__b64; delete opts.body; }
+    var r = JSON.parse(__httpRequest(JSON.stringify(opts)));
+    if (r.binary !== undefined) r.body = new Buf(r.binary);
+    return opts.returnFullResponse || opts.resolveWithFullResponse ? { body: r.body, headers: r.headers, statusCode: r.statusCode, statusMessage: r.statusMessage } : r.body;
+  }
+  g.helpers = {
+    httpRequest: promised(httpRequest),
+    request: promised(function (opts) { if (opts && typeof opts === 'object' && opts.json === undefined) opts = Object.assign({ json: false }, opts); return httpRequest(opts); }),
+    prepareBinaryData: promised(function (data, fileName, mimeType) { return JSON.parse(__binaryData(bufB64(data), fileName || '', mimeType || '')); }),
+    getBinaryDataBuffer: promised(function (itemIndex, prop) {
+      var it = g.$input.all()[itemIndex];
+      var b = it && it.binary && it.binary[prop];
+      if (!b) throw new Error('item ' + itemIndex + ' has no binary property "' + prop + '"');
+      return new Buf(b.data);
+    }),
+    binaryToBuffer: promised(function (b) { return b instanceof Buf ? b : new Buf(String(b)); }),
+    returnJsonArray: function (d) { return (Array.isArray(d) ? d : [d]).map(function (j) { return { json: j }; }); }
+  };
+  function hasher(alg, key) {
+    var chunks = [], h = {
+      update: function (d, enc) { chunks.push(bufB64(d, enc)); return h; },
+      digest: function (enc) {
+        var out = __digest(String(alg), key === undefined ? '' : bufB64(key), JSON.stringify(chunks), key !== undefined);
+        enc = enc && String(enc).toLowerCase();
+        if (enc === 'hex') return __b64hex(out);
+        if (enc === 'base64') return out;
+        if (enc === 'base64url') return out.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        return new Buf(out);
+      }
+    };
+    return h;
+  }
+  var cryptoModule = {
+    createHash: function (alg) { return hasher(alg); },
+    createHmac: function (alg, key) { return hasher(alg, key); },
+    randomUUID: function () { return __uuid(); },
+    randomBytes: function (n) { return new Buf(__randomB64(Number(n))); },
+    randomInt: function (min, max) { if (max === undefined) { max = min; min = 0; } return min + Math.floor(__randomFloat() * (max - min)); },
+    timingSafeEqual: function (a, b) { return bufB64(a) === bufB64(b); }
+  };
+  function inspect(v) { if (typeof v === 'string') return "'" + v + "'"; try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); } }
+  var utilModule = {
+    format: function (f) {
+      var args = Array.prototype.slice.call(arguments, 1), i = 0;
+      var s = String(f).replace(/%[sdifjoO%]/g, function (m) {
+        if (m === '%%') return '%';
+        if (i >= args.length) return m;
+        var a = args[i++];
+        switch (m) {
+          case '%d': case '%i': return String(m === '%i' ? parseInt(a, 10) : Number(a));
+          case '%f': return String(parseFloat(a));
+          case '%j': return JSON.stringify(a);
+          case '%o': case '%O': return inspect(a);
+          default: return typeof a === 'object' ? inspect(a) : String(a);
+        }
+      });
+      while (i < args.length) { var a = args[i++]; s += ' ' + (typeof a === 'object' ? inspect(a) : String(a)); }
+      return s;
+    },
+    inspect: inspect,
+    isDeepStrictEqual: function (a, b) { return JSON.stringify(a) === JSON.stringify(b); },
+    promisify: function (fn) { return function () { var args = Array.prototype.slice.call(arguments); return new Promise(function (res, rej) { args.push(function (e, v) { if (e) rej(e); else res(v); }); fn.apply(null, args); }); }; },
+    types: { isDate: function (v) { return v instanceof Date; }, isRegExp: function (v) { return v instanceof RegExp; } }
+  };
+  g.require = function (name) {
+    name = String(name).replace(/^node:/, '');
+    if (name === 'crypto') return cryptoModule;
+    if (name === 'util') return utilModule;
+    throw new Error("Cannot find module '" + name + "' (only 'crypto' and 'util' are available)");
+  };
+
   // ---------------------------------------------------------------- helpers
   g.console = { log: __log, info: __log, warn: __log, error: __log, debug: __log };
   g.$if = function (c, a, b) { return c ? a : b; };
@@ -500,7 +589,6 @@
   };
   g.$max = function () { return Math.max.apply(null, arguments); };
   g.$min = function () { return Math.min.apply(null, arguments); };
-  g.require = function (m) { throw new Error("require('" + m + "') is not available in this runtime"); };
 
   // __export converts a JS value to a JSON string for the Go side.
   g.__export = function (v) {

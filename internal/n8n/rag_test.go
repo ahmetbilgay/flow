@@ -151,3 +151,35 @@ func TestRAGInMemoryAndQdrant(t *testing.T) {
 		t.Fatalf("collection should be created with the embedding size: %v", c)
 	}
 }
+
+func TestSummarizeDocumentLoaderAndQdrantUpdate(t *testing.T) {
+	srv, seen := ragServer(t)
+	creds := NewStaticCredentials()
+	creds.Set("openAiApi", "*", map[string]interface{}{"apiKey": "k", "url": srv.URL})
+	creds.Set("qdrantApi", "*", map[string]interface{}{"qdrantUrl": srv.URL})
+	h := newHarness(t, &Options{Credentials: creds, Outbound: node.OutboundPolicy{AllowedHosts: []string{"127.0.0.1"}}})
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		nd("Doc", "set", 3.4, map[string]interface{}{"mode": "raw", "jsonOutput": `{"text":"Refunds are processed within 5 days"}`}),
+		lc("Summarize", "chainSummarization", 2, map[string]interface{}{"operationMode": "documentLoader"}),
+		withCred(lc("Model", "lmChatOpenAi", 1, nil), "openAiApi"),
+		lc("Loader", "documentDefaultDataLoader", 1, map[string]interface{}{"jsonMode": "expressionData", "jsonData": "={{ $json.text }}"}),
+		withCred(lc("Update", "vectorStoreQdrant", 1.1, map[string]interface{}{"mode": "update", "id": "42", "qdrantCollection": map[string]interface{}{"__rl": true, "mode": "id", "value": "kb"}}), "qdrantApi"),
+		lc("Loader2", "documentDefaultDataLoader", 1, map[string]interface{}{"jsonMode": "expressionData", "jsonData": "={{ $json.text }}"}),
+		withCred(lc("Emb", "embeddingsOpenAi", 1.2, nil), "openAiApi"),
+	}, "Start->Doc", "Doc->Summarize", "Model~ai_languageModel->Summarize", "Loader~ai_document->Summarize",
+		"Doc->Update", "Loader2~ai_document->Update", "Emb~ai_embedding->Update")
+	_, rep, _ := Import(data, ImportOptions{})
+	if !rep.Runnable {
+		t.Fatalf("not runnable: %+v", rep.Blocking)
+	}
+	_, steps := h.run(t, data, "")
+	got := itemsOf(t, steps["Summarize"], 0)
+	if asMap(got[0]["response"])["text"] != "Refunds take 5 days." {
+		t.Fatalf("summary from loader documents: %v", got)
+	}
+	body, _ := seen.Load("PUT /collections/kb/points")
+	if !strings.Contains(toString(body), `"id":42`) || !strings.Contains(toString(body), "Refunds are processed") {
+		t.Fatalf("qdrant update: %v", body)
+	}
+}

@@ -16,7 +16,13 @@ type sheetsAPI struct {
 
 func googleSheetsNode(ec *execCtx) ([][]Item, error) {
 	if ec.version < 4 {
-		return nil, permanentError{"Google Sheets node v1-v3 is not supported; re-import with v4"}
+		params, err := sheetsLegacyParams(ec.params, ec.version)
+		if err != nil {
+			return nil, err
+		}
+		v4 := *ec
+		v4.params, v4.version = params, 4
+		ec = &v4
 	}
 	h, err := ec.googleAuth("sheets", "googleSheetsOAuth2Api")
 	if err != nil {
@@ -409,4 +415,87 @@ func (s *sheetsAPI) createSpreadsheet() ([][]Item, error) {
 		out = append(out, Item{JSON: res, PairedItem: paired(i)})
 	}
 	return [][]Item{out}, nil
+}
+
+// sheetsLegacyParams rewrites Google Sheets v1–v3 parameters into the v4
+// layout: v3 (documentId/sheetName like v4, dataMode + fieldsUi) and v1/v2
+// (sheetId, "Sheet!A:Z" range, key column).
+func sheetsLegacyParams(p map[string]interface{}, version float64) (map[string]interface{}, error) {
+	out := map[string]interface{}{}
+	for k, v := range p {
+		out[k] = v
+	}
+	op := toString(p["operation"])
+	if version < 3 {
+		if op == "" {
+			op = "read"
+		}
+		out["documentId"] = p["sheetId"]
+		sheet := "gid=0"
+		if r := toString(p["range"]); strings.Contains(r, "!") {
+			sheet = strings.Trim(r[:strings.LastIndex(r, "!")], "'")
+		}
+		out["sheetName"] = map[string]interface{}{"__rl": true, "mode": "name", "value": sheet}
+		if !strings.Contains(toString(p["range"]), "!") {
+			out["sheetName"] = sheet
+		}
+		key := toString(p["key"])
+		if key == "" {
+			key = "id"
+		}
+		switch op {
+		case "read", "clear", "append":
+		case "lookup":
+			op = "read"
+			out["filtersUI"] = map[string]interface{}{"values": []interface{}{map[string]interface{}{"lookupColumn": p["lookupColumn"], "lookupValue": p["lookupValue"]}}}
+			if !toBool(asMap(p["options"])["returnAllMatches"]) {
+				opts := map[string]interface{}{}
+				for k, v := range asMap(p["options"]) {
+					opts[k] = v
+				}
+				opts["returnFirstMatch"] = true
+				out["options"] = opts
+			}
+		case "update", "upsert":
+			out["columnToMatchOn"] = key
+			if op == "upsert" {
+				op = "appendOrUpdate"
+			}
+		default:
+			return nil, permanentError{fmt.Sprintf("Google Sheets v%v operation %q is not supported (v4 is)", version, op)}
+		}
+		out["operation"] = op
+		out["columns"] = map[string]interface{}{"mappingMode": "autoMapInputData"}
+		return out, nil
+	}
+	// v3
+	switch op {
+	case "append", "update", "appendOrUpdate":
+		mode := toString(p["dataMode"])
+		fields := asList(asMap(p["fieldsUi"])["values"])
+		if mode == "" {
+			mode = "autoMapInputData"
+			if len(fields) > 0 {
+				mode = "defineBelow"
+			}
+		}
+		cols := map[string]interface{}{"mappingMode": mode}
+		if mode == "defineBelow" {
+			value := map[string]interface{}{}
+			for _, f := range fields {
+				m := asMap(f)
+				col := toString(m["column"])
+				if col == "" {
+					col = toString(m["fieldId"])
+				}
+				value[col] = m["fieldValue"]
+			}
+			if c := toString(p["columnToMatchOn"]); c != "" && p["valueToMatchOn"] != nil {
+				value[c] = p["valueToMatchOn"]
+			}
+			cols["value"] = value
+		}
+		out["columns"] = cols
+	}
+	return out, nil
 }

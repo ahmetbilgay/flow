@@ -475,13 +475,19 @@ func pgColumns(ec *execCtx, i int, it Item) map[string]interface{} {
 }
 
 func pgWhere(ec *execCtx, i int) (string, []interface{}) {
+	return sqlWhere(ec, i, pgIdent, func(n int) string { return "$" + strconv.Itoa(n) })
+}
+
+// sqlWhere builds the WHERE clause of the SQL nodes' select/delete
+// operations with the dialect's identifier quoting and placeholders.
+func sqlWhere(ec *execCtx, i int, quote func(string) string, ph func(int) string) (string, []interface{}) {
 	wv, _ := ec.param(i, "where.values", nil)
 	var conds []string
 	var args []interface{}
 	ops := map[string]string{"equal": "=", "notEqual": "<>", "LIKE": "LIKE", "gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
 	for _, raw := range asList(wv) {
 		m, _ := raw.(map[string]interface{})
-		col := pgIdent(toString(m["column"]))
+		col := quote(toString(m["column"]))
 		switch cond := toString(m["condition"]); cond {
 		case "IS NULL", "IS NOT NULL":
 			conds = append(conds, col+" "+cond)
@@ -491,7 +497,7 @@ func pgWhere(ec *execCtx, i int) (string, []interface{}) {
 				op = "="
 			}
 			args = append(args, m["value"])
-			conds = append(conds, fmt.Sprintf("%s %s $%d", col, op, len(args)))
+			conds = append(conds, fmt.Sprintf("%s %s %s", col, op, ph(len(args))))
 		}
 	}
 	if len(conds) == 0 {
@@ -703,11 +709,15 @@ func mustBool(ec *execCtx, i int, path string) bool {
 func chainSummarizationNode(ec *execCtx) ([][]Item, error) {
 	mode, _ := ec.str(0, "operationMode", "nodeInputJson")
 	if mode == "documentLoader" {
-		return nil, permanentError{"Summarization Chain: document loader mode is not supported"}
-	}
-	chunk, _ := ec.num(0, "options.chunkSize", 0)
-	if chunk <= 0 {
-		chunk, _ = ec.num(0, "chunkSize", 1000)
+		docs, err := ec.loadDocuments(ec.node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("summarization chain: %w", err)
+		}
+		texts := make([]string, len(docs))
+		for k, d := range docs {
+			texts[k] = d.PageContent
+		}
+		return summarizeTexts(ec, texts)
 	}
 	var texts []string
 	for _, it := range ec.items() {
@@ -725,6 +735,16 @@ func chainSummarizationNode(ec *execCtx) ([][]Item, error) {
 			continue
 		}
 		texts = append(texts, mustJSON(it.JSON))
+	}
+	return summarizeTexts(ec, texts)
+}
+
+// summarizeTexts summarizes texts in one call, or map-reduce style when
+// they exceed the chunk size.
+func summarizeTexts(ec *execCtx, texts []string) ([][]Item, error) {
+	chunk, _ := ec.num(0, "options.chunkSize", 0)
+	if chunk <= 0 {
+		chunk, _ = ec.num(0, "chunkSize", 1000)
 	}
 	model, base, err := ec.buildModel(0)
 	if err != nil {

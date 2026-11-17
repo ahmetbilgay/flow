@@ -171,7 +171,7 @@ Built-in node types are automatically registered:
 
 ## n8n Workflows
 
-Import and run [n8n](https://n8n.io) workflow exports and templates. Every n8n node becomes a durable engine step; expressions, items, paired items, loops, sub-workflows, AI agents (OpenAI, Anthropic, Gemini, …), RAG (Qdrant, Pinecone, Supabase) and 40+ integrations are supported. On the 299 most-viewed public templates, 76% import as fully runnable, and the importer reports exactly what is missing for the rest.
+Import and run [n8n](https://n8n.io) workflow exports and templates. Every n8n node becomes a durable engine step; expressions, items, paired items, loops, sub-workflows, AI agents (OpenAI, Anthropic, Gemini, …), RAG (Qdrant, Pinecone, Supabase) and 40+ integrations are supported. On the 299 most-viewed public templates, 81% import as fully runnable, and the importer reports exactly what is missing for the rest.
 
 ```go
 eng.EnableN8N(flow.N8NOptions{Credentials: myVault})

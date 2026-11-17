@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -680,6 +681,33 @@ func vectorStoreNode(ec *execCtx) ([][]Item, error) {
 			out[i] = Item{JSON: map[string]interface{}{"pageContent": d.PageContent, "metadata": d.Metadata}, PairedItem: paired(0)}
 		}
 		return [][]Item{out}, nil
+	case "update":
+		up, ok := store.(vectorUpdater)
+		if !ok {
+			return nil, permanentError{"vector store: update mode is not supported by this store"}
+		}
+		docs, err := ec.loadDocuments(ec.node.Config)
+		if err != nil {
+			return nil, err
+		}
+		if len(docs) != 1 {
+			return nil, permanentError{fmt.Sprintf("vector store update: the document loader must produce exactly one document (got %d); disable text splitting", len(docs))}
+		}
+		id, err := ec.str(0, "id", "")
+		if err != nil {
+			return nil, err
+		}
+		if id == "" {
+			return nil, permanentError{"vector store update: ID is empty"}
+		}
+		vecs, err := emb.embed(ec.ctx, []string{docs[0].PageContent})
+		if err != nil {
+			return nil, err
+		}
+		if err := up.update(ec.ctx, id, docs[0], vecs[0]); err != nil {
+			return nil, err
+		}
+		return [][]Item{{{JSON: map[string]interface{}{"id": id, "pageContent": docs[0].PageContent, "metadata": docs[0].Metadata}, PairedItem: paired(0)}}}, nil
 	case "load":
 		var out []Item
 		for i := range ec.items() {
@@ -874,4 +902,41 @@ func ragSubNodeSupported(typ string) bool {
 		return true
 	}
 	return vectorStoreTypes[s]
+}
+
+// vectorUpdater is implemented by stores whose documents have IDs; it
+// backs the vector store nodes' "update" mode.
+type vectorUpdater interface {
+	update(ctx context.Context, id string, doc document, vec []float64) error
+}
+
+func (s *supabaseStore) update(ctx context.Context, id string, d document, vec []float64) error {
+	row := map[string]interface{}{"content": d.PageContent, "metadata": d.Metadata, "embedding": vec}
+	_, err := s.ec.doRequest("PATCH", s.base+"/rest/v1/"+url.PathEscape(s.table)+"?id=eq."+url.QueryEscape(id), s.headers, mustBytes(row), "application/json")
+	return err
+}
+
+func (q *qdrantStore) update(ctx context.Context, id string, d document, vec []float64) error {
+	var pid interface{} = id
+	if n, err := strconv.ParseUint(id, 10, 64); err == nil {
+		pid = n // Qdrant point IDs are unsigned integers or UUIDs
+	}
+	point := map[string]interface{}{"id": pid, "vector": vec, "payload": map[string]interface{}{"content": d.PageContent, "metadata": d.Metadata}}
+	_, _, err := q.ec.apiCall("PUT", q.path("/points?wait=true"), q.headers, map[string]interface{}{"points": []interface{}{point}}, "")
+	return err
+}
+
+func (p *pineconeStore) update(ctx context.Context, id string, d document, vec []float64) error {
+	meta := cloneJSON(d.Metadata)
+	for k, v := range meta {
+		if _, ok := v.(map[string]interface{}); ok {
+			meta[k] = mustJSON(v)
+		}
+	}
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	meta["text"] = d.PageContent
+	_, _, err := p.ec.apiCall("POST", p.host+"/vectors/upsert", p.headers, map[string]interface{}{"vectors": []interface{}{map[string]interface{}{"id": id, "values": vec, "metadata": meta}}, "namespace": p.namespace}, "")
+	return err
 }
