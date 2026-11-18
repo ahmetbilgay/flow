@@ -195,10 +195,13 @@ jobs:
       - name: Run benchmarks
         run: |
           go test -bench=. -benchmem -run=^$ -timeout=10m | tee benchmark.txt
+          { echo '### 📊 Benchmark Results'; echo '```'; cat benchmark.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+      # Fork PRs get a read-only GITHUB_TOKEN, so commenting would fail with 403;
+      # their results are in the job summary above.
       - name: Comment benchmark results
         uses: actions/github-script@v7
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           script: |
             const fs = require('fs');
