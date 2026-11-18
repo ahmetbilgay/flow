@@ -114,10 +114,12 @@ jobs:
           go-version: '1.23'
           cache: true
 
-      - name: Start MinIO (S3)
+      # MinIO no longer publishes images (minio/minio is gone from Docker Hub);
+      # RustFS is S3/SigV4-compatible and accepts the same credentials.
+      - name: Start S3 (RustFS)
         run: |
-          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
-          for i in $(seq 1 30); do curl -sf http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
+          docker run -d --name s3 -p 9000:9000 -e RUSTFS_ACCESS_KEY=minioadmin -e RUSTFS_SECRET_KEY=minioadmin rustfs/rustfs:1.0.6 /data
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:9000/health && break; sleep 1; done
 
       - name: Run integration tests
         env:
