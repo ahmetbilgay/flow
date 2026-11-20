@@ -184,9 +184,10 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.notionTrigger":               "poll",
 	"n8n-nodes-base.googleCalendarTrigger":       "poll",
 	"n8n-nodes-base.airtableTrigger":             "poll",
+	"n8n-nodes-base.evaluationTrigger":           "evaluation",
 }
 
-var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7, "mcp": 8}
+var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7, "mcp": 8, "evaluation": 9}
 
 func isTriggerType(t string) bool {
 	if _, ok := triggerKinds[t]; ok {
@@ -595,6 +596,8 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		if toBool(get("waitUserReply")) {
 			rep.block(n, "Respond to Chat waiting for the user's reply is not supported")
 		}
+	case "evaluationTrigger":
+		rep.warn(n, "evaluation runs (dataset rows, metrics) are not supported; started directly, the Evaluation Trigger passes its input on")
 	case "youTube":
 		r, o := toString(get("resource")), toString(get("operation"))
 		if r == "" {

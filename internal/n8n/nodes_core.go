@@ -1298,3 +1298,15 @@ func applyIgnoreCase(ec *execCtx, i int, c map[string]interface{}) map[string]in
 	out["options"] = opts
 	return out
 }
+
+// evaluationNode is n8n's Evaluation node outside evaluation runs (the only
+// mode supported): "Check if evaluating" routes items to its "Normal"
+// output; setting outputs or metrics passes the items on unchanged.
+func evaluationNode(ec *execCtx) ([][]Item, error) {
+	op, _ := ec.str(0, "operation", "setOutputs")
+	out, _ := passthrough(ec)
+	if op == "checkIfEvaluating" {
+		return [][]Item{nil, out[0]}, nil
+	}
+	return out, nil
+}
