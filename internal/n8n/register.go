@@ -231,6 +231,7 @@ func extraNodeTypes(opts *Options) map[string]nodeFunc {
 		b + "microsoftOutlook":               outlookNode,
 		b + "editImage":                      editImageNode,
 		lc + "chainSummarization":            chainSummarizationNode,
+		lc + "mcpClient":                     mcpClientNode,
 		lc + "chainRetrievalQa":              chainRetrievalQaNode,
 		b + "summarize":                      summarizeNode,
 		b + "dateTime":                       dateTimeNode,
