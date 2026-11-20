@@ -97,7 +97,7 @@ func rewriteLoop(wf *models.Workflow, loopID string, body map[string]bool, rep *
 		}
 	}
 	for _, e := range wf.Edges {
-		if body[e.TargetID] && !body[e.SourceID] && !(e.SourceID == loopID && e.Condition == "1") {
+		if body[e.TargetID] && !body[e.SourceID] && (e.SourceID != loopID || e.Condition != "1") {
 			// An edge from outside into the body: run the loop as a
 			// stateful node in a cyclic region instead.
 			loopNode.Config[cfgLoopCycle] = true

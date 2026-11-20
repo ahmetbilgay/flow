@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -708,14 +707,4 @@ func bearerClient(base string, c map[string]interface{}, keyFields ...string) *r
 		tok = firstNonEmpty(k, tok)
 	}
 	return &restClient{base: base, headers: map[string]string{"Authorization": "Bearer " + tok}}
-}
-
-// restOpsList lists a service's operations for import checks and docs.
-func (s *restService) restOpsList() []string {
-	out := make([]string, 0, len(s.ops))
-	for k := range s.ops {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

@@ -597,14 +597,20 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 	case "youTube":
 		r, o := toString(get("resource")), toString(get("operation"))
-		if o == "" {
-			o = "getAll"
+		if r == "" {
+			r = "channel"
 		}
-		if r != "video" || !youTubeVideoOps[o] {
-			if r == "" {
-				r = "channel"
+		if o == "" {
+			o = map[string]string{"playlistItem": "add"}[r]
+			if o == "" {
+				o = "getAll"
 			}
-			rep.block(n, "YouTube %s/%s is not supported (video getAll/get/update/upload/delete are)", r, o)
+		}
+		if strings.HasPrefix(r, "=") || strings.HasPrefix(o, "=") {
+			break
+		}
+		if (r != "video" || !youTubeVideoOps[o]) && youTubeOther.op(r, o) == nil {
+			rep.block(n, "YouTube %s/%s is not supported", r, o)
 		}
 	case "googleDrive":
 		if n.TypeVersion < 3 {
