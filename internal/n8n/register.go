@@ -126,6 +126,7 @@ func nodeTypes() map[string]nodeFunc {
 		b + "renameKeys":                   renameKeysNode,
 		b + "graphql":                      graphqlNode,
 		b + "jwt":                          jwtNode,
+		b + "ssh":                          sshNode,
 		b + "mongoDb":                      mongoDbNode,
 		b + "rssFeedReadTrigger":           rssFeedReadTriggerNode,
 		b + "notionTrigger":                notionTriggerNode,
