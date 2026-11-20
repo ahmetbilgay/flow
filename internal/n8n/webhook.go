@@ -641,7 +641,7 @@ func (h *Handler) handleResume(w http.ResponseWriter, r *http.Request, execID st
 		}
 		kind = "approval"
 		item = map[string]interface{}{"data": map[string]interface{}{"approved": approved == "true"}}
-	case n.Type == "n8n-nodes-base.form":
+	case isFormPage(n):
 		kind = "form"
 		m, _ := parseBody(r, body).(map[string]interface{})
 		if m == nil {
@@ -699,7 +699,7 @@ func (h *Handler) formFlow(w http.ResponseWriter, r *http.Request, execID string
 		for _, s := range steps {
 			if s.Status == models.TaskWaiting {
 				for i := range wf.Nodes {
-					if wf.Nodes[i].ID == s.NodeID && wf.Nodes[i].Type == "n8n-nodes-base.form" {
+					if wf.Nodes[i].ID == s.NodeID && isFormPage(&wf.Nodes[i]) {
 						writeJSON(w, http.StatusOK, map[string]interface{}{"page": formPageDefinition(nodeParams(&wf.Nodes[i])), "resumeUrl": h.n8n.resumeURL(h.opts.Namespace, execID, s.NodeID)})
 						return
 					}
@@ -770,4 +770,10 @@ func WebhookKeys(wf *models.Workflow) []string {
 		}
 	}
 	return keys
+}
+
+// isFormPage reports whether a waiting node shows a form page: a Form node
+// or a Wait node resumed by a form submission.
+func isFormPage(n *models.Node) bool {
+	return n.Type == "n8n-nodes-base.form" || n.Type == "n8n-nodes-base.wait" && toString(nodeParams(n)["resume"]) == "form"
 }

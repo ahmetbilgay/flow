@@ -1034,6 +1034,11 @@ func waitNode(ec *execCtx) ([][]Item, error) {
 			return nil, fmt.Errorf("wait: invalid date %q", s)
 		}
 		d = time.Until(t)
+	case "form":
+		if _, err := ec.resumeURL(); err != nil {
+			return nil, err
+		}
+		return nil, errWaitSignal
 	default:
 		return nil, errWaitSignal
 	}

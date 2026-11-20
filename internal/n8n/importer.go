@@ -568,7 +568,7 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 	case "wait":
 		if r := toString(get("resume")); r == "form" {
-			rep.block(n, "wait for form submission is not supported")
+			rep.warn(n, "form pages need Options.ResumeBaseURL/ResumeSecret; the /form endpoint returns the next page definition")
 		} else if r == "webhook" {
 			rep.warn(n, "resume via webhook maps to engine signals (SignalExecution)")
 		}
