@@ -122,6 +122,7 @@ func nodeTypes() map[string]nodeFunc {
 		b + "googleTasks":                  googleTasksNode,
 		b + "googleAnalytics":              googleAnalyticsNode,
 		b + "s3":                           s3Node,
+		b + "awsS3":                        awsS3Node,
 		b + "mongoDb":                      mongoDbNode,
 		b + "rssFeedReadTrigger":           rssFeedReadTriggerNode,
 		b + "notionTrigger":                notionTriggerNode,
