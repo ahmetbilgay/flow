@@ -186,10 +186,6 @@ func init() {
 	registerREST("n8n-nodes-htmlcsstopdf.htmlcsstopdf", &restService{
 		defResource: "pdfCreation",
 		defOps:      map[string]string{"pdfCreation": "htmlToPdf", "pdfManipulation": "mergePdfs", "pdfSecurity": "lockPdf", "pdfParsing": "parsePdf"},
-		// Operation names some templates use for the same calls.
-		aliases: map[string]string{"pdfManipulation/compress": "pdfManipulation/compressPdf", "pdfManipulation/mergePdf": "pdfManipulation/mergePdfs",
-			"pdfManipulation/unlockPdf": "pdfSecurity/unlockPdf", "pdfManipulation/encrypt": "pdfSecurity/lockPdf",
-			"pdfManipulation/parsePdfToJson": "pdfParsing/parsePdf"},
 		client: func(ec *execCtx, i int) (*restClient, error) {
 			c, _, err := ec.restCred(i, "htmlcsstopdfApi", nil)
 			if err != nil {

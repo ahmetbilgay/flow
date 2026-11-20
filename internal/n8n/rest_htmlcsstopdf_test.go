@@ -60,7 +60,7 @@ func TestHTMLCSSToPDFNode(t *testing.T) {
 		t.Fatalf("lock body %v", b)
 	}
 	// operation name used by some templates
-	out = cmtyRun(t, f, bases, typ, map[string]interface{}{"resource": "pdfManipulation", "operation": "parsePdfToJson", "parse_url": "https://a/1.pdf"}, cred, nil)
+	out = cmtyRun(t, f, bases, typ, map[string]interface{}{"resource": "pdfParsing", "operation": "parsePdf", "parse_url": "https://a/1.pdf"}, cred, nil)
 	if b := f.find(t, "POST", "/pdf/parse").json(t); b["mode"] != "full" || b["pages"] != "all" || out[0].JSON["text"] != "hello" {
 		t.Fatalf("parse body %v", b)
 	}
