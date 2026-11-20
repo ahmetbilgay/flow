@@ -529,6 +529,9 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		}
 		return cur
 	}
+	if restServices[strings.TrimSuffix(typ, "Tool")] != nil {
+		checkResourceOps(n, typ, get, rep)
+	}
 	switch short(typ) {
 	case "httpRequest":
 		if get("options.proxy") != nil {
@@ -1052,6 +1055,20 @@ var resourceOps = map[string]struct {
 }
 
 func checkResourceOps(n *rawNode, typ string, get func(string) interface{}, rep *Report) {
+	if rs := restServices[strings.TrimSuffix(typ, "Tool")]; rs != nil {
+		r, o := toString(get("resource")), toString(get("operation"))
+		if r == "" {
+			r = rs.defResource
+		}
+		if o == "" {
+			o = rs.defOps[r]
+		}
+		if strings.HasPrefix(r, "=") || strings.HasPrefix(o, "=") || rs.supports(r, o) {
+			return
+		}
+		rep.block(n, "%s %s/%s is not supported", n.Type[strings.LastIndex(n.Type, ".")+1:], r, o)
+		return
+	}
 	spec, ok := resourceOps[short(typ)]
 	if !ok {
 		return

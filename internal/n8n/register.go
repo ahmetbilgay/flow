@@ -72,7 +72,7 @@ func (s *StaticCredentials) Credential(_ context.Context, _ string, credType str
 // nodeTypes lists every supported n8n node type.
 func nodeTypes() map[string]nodeFunc {
 	b := "n8n-nodes-base."
-	return map[string]nodeFunc{
+	m := map[string]nodeFunc{
 		// triggers
 		b + "manualTrigger":                          passthrough,
 		b + "start":                                  passthrough,
@@ -151,6 +151,10 @@ func nodeTypes() map[string]nodeFunc {
 		b + "function":                     functionNode,
 		b + "functionItem":                 functionItemNode,
 	}
+	for typ, s := range restServices {
+		m[typ] = s.run
+	}
+	return m
 }
 
 // Register adds every supported n8n node type to the registry.
