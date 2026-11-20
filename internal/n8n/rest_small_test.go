@@ -100,3 +100,16 @@ func (w *replaceWriter) Write(b []byte) (int, error) {
 	_, err := w.ResponseWriter.Write([]byte(strings.ReplaceAll(string(b), `"URL/`, `"`+w.base+`/`)))
 	return len(b), err
 }
+
+func TestMistralOCR(t *testing.T) {
+	f := newFakeAPI(t, func(r recorded) (int, string, interface{}) {
+		return 200, "application/json", map[string]interface{}{"pages": []interface{}{map[string]interface{}{"markdown": "# A"}, map[string]interface{}{"markdown": "B"}}}
+	})
+	out := restRun(t, f, "mistral", "mistralAi", map[string]interface{}{"inputType": "url", "url": "https://x/doc.pdf"}, map[string]map[string]interface{}{"mistralCloudApi": {"apiKey": "mk"}})
+	if out[0]["extractedText"] != "# A\n\nB" || out[0]["pageCount"] != 2.0 {
+		t.Fatalf("ocr: %v", out)
+	}
+	if b := f.find(t, "POST", "/v1/ocr").body; !strings.Contains(b, `"document_url":"https://x/doc.pdf"`) || !strings.Contains(b, `"model":"mistral-ocr-latest"`) {
+		t.Fatalf("body %s", b)
+	}
+}

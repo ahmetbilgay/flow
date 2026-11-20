@@ -376,3 +376,50 @@ func jinaRun(ec *execCtx, i int, _ Item, c *restClient) ([]Item, error) {
 	}
 	return restItems(v), nil
 }
+
+func init() {
+	registerREST("mistralAi", &restService{
+		defResource: "document",
+		defOps:      map[string]string{"document": "extractText"},
+		client: func(ec *execCtx, i int) (*restClient, error) {
+			c, err := ec.credential("mistralCloudApi")
+			if err != nil {
+				return nil, err
+			}
+			return bearerClient(ec.apiBase("mistral", "https://api.mistral.ai"), c, "apiKey"), nil
+		},
+		ops: map[string]*restOp{
+			// Batch mode gives the same results; each item is sent on its own.
+			"document/extractText": {run: func(ec *execCtx, i int, it Item, c *restClient) ([]Item, error) {
+				model, _ := ec.str(i, "model", "mistral-ocr-latest")
+				typ, _ := ec.str(i, "documentType", "document_url")
+				doc := map[string]interface{}{"type": typ}
+				if in, _ := ec.str(i, "inputType", "binary"); in == "url" {
+					doc[typ], _ = ec.str(i, "url", "")
+				} else {
+					prop, _ := ec.str(i, "binaryProperty", "data")
+					data, mt, name, err := binaryOf(it, prop)
+					if err != nil {
+						return nil, err
+					}
+					doc[typ] = "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(data)
+					if typ == "document_url" && name != "" {
+						doc["document_name"] = name
+					}
+				}
+				v, err := c.do(ec, &restRequest{method: "POST", path: "/v1/ocr", body: map[string]interface{}{"model": model, "document": doc}})
+				if err != nil {
+					return nil, err
+				}
+				res := asMap(v)
+				var texts []string
+				for _, p := range asList(res["pages"]) {
+					texts = append(texts, toString(asMap(p)["markdown"]))
+				}
+				res["extractedText"] = strings.Join(texts, "\n\n")
+				res["pageCount"] = float64(len(texts))
+				return []Item{{JSON: res}}, nil
+			}},
+		},
+	})
+}
