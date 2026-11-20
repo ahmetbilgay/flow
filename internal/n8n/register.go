@@ -124,6 +124,9 @@ func nodeTypes() map[string]nodeFunc {
 		b + "s3":                           s3Node,
 		b + "mongoDb":                      mongoDbNode,
 		b + "rssFeedReadTrigger":           rssFeedReadTriggerNode,
+		b + "notionTrigger":                notionTriggerNode,
+		b + "googleCalendarTrigger":        googleCalendarTriggerNode,
+		b + "airtableTrigger":              airtableTriggerNode,
 		b + "dhl":                          dhlNode,
 		b + "n8n":                          n8nAPINode,
 		b + "executeCommand":               executeCommandNode,
@@ -161,6 +164,10 @@ func Register(reg *engine.Registry, opts *Options) {
 	for typ, fn := range extraNodeTypes(opts) {
 		reg.Register(typ, &executor{typ: typ, fn: fn, opts: opts})
 	}
+	for typ := range serviceHooks {
+		// The webhook handler builds the items; the trigger passes them on.
+		reg.Register(typ, &executor{typ: typ, fn: passthrough, opts: opts})
+	}
 }
 
 // Supported reports whether an n8n node type has an implementation.
@@ -169,6 +176,9 @@ func Supported(typ string) bool {
 		return true
 	}
 	if _, ok := extraNodeTypes(&Options{})[typ]; ok {
+		return true
+	}
+	if serviceHooks[typ].handle != nil {
 		return true
 	}
 	return aiSubNodeSupported(typ)

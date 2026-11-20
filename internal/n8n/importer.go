@@ -181,6 +181,9 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.localFileTrigger":            "poll",
 	"@n8n/n8n-nodes-langchain.mcpTrigger":        "mcp",
 	"n8n-nodes-base.twilioTrigger":               "webhook",
+	"n8n-nodes-base.notionTrigger":               "poll",
+	"n8n-nodes-base.googleCalendarTrigger":       "poll",
+	"n8n-nodes-base.airtableTrigger":             "poll",
 }
 
 var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7, "mcp": 8}
@@ -731,11 +734,28 @@ func triggerSpec(n *rawNode, rep *Report) TriggerSpec {
 	kind, ok := triggerKinds[n.Type]
 	if !ok {
 		kind = "external"
+		if serviceHooks[n.Type].handle != nil {
+			kind = "webhook"
+		}
 	}
 	ts := TriggerSpec{Node: n.Name, Type: n.Type, Kind: kind}
 	p := n.Parameters
 	switch kind {
 	case "webhook":
+		if serviceHooks[n.Type].handle != nil {
+			ts.Path = n.WebhookID
+			if ts.Path == "" {
+				ts.Path = n.ID
+			}
+			ts.Method = "POST"
+			ts.ResponseMode = "onReceived"
+			if _, auto := hookRegistrars[n.Type]; auto {
+				rep.warn(n, "events arrive at <handler base URL>/webhook/%s; set N8NInstallOptions.WebhookBaseURL to create the webhook in the service (it also stores the signing secret)", ts.Path)
+			} else {
+				rep.warn(n, "events arrive at <handler base URL>/webhook/%s; enter this URL in the service's webhook settings", ts.Path)
+			}
+			break
+		}
 		if rawBodyTriggers[n.Type] {
 			ts.Path = n.WebhookID
 			if ts.Path == "" {

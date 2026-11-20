@@ -72,7 +72,7 @@ Read results with `flow.N8NOutputItems(execution.Output)`.
 
 ## Supported nodes
 
-**Triggers:** Manual, Schedule, Cron, Interval, Webhook, Form, Chat, Execute Workflow Trigger, Error Trigger, Telegram, WhatsApp, Gmail (polling), Google Sheets (polling), Google Drive (polling), Email Trigger (IMAP; polled every minute instead of IDLE, UNSEEN/flag/date/header rules, marks messages read).
+**Triggers:** Manual, Schedule, service webhooks (see below), Notion / Google Calendar / Airtable (polling), Cron, Interval, Webhook, Form, Chat, Execute Workflow Trigger, Error Trigger, Telegram, WhatsApp, Gmail (polling), Google Sheets (polling), Google Drive (polling), Email Trigger (IMAP; polled every minute instead of IDLE, UNSEEN/flag/date/header rules, marks messages read).
 
 **Flow & data:** IF, Switch, Filter, Merge (append, combine by fields / position / all, choose branch, v1 modes), Loop Over Items, Split In Batches v1/v2 (with `$node["X"].context.noItemsLeft`), Set / Edit Fields (v1–v3.4), Code (JavaScript, both modes), Function, Function Item, Split Out, Aggregate, Summarize, Limit, Sort, Remove Duplicates (incl. items seen in previous executions: keys, incremental, date; node/workflow scope), Item Lists, No Op, Wait (time, date, webhook), Stop and Error, Execute Workflow (database / inline JSON, once / each), Respond to Webhook (JSON, text, binary, redirect), Date & Time, XML, HTML (template, extract, table), HTML Extract, Markdown, Extract from File (PDF, CSV, XLSX, ODS, text, JSON, HTML, base64), Convert to File (CSV, XLSX, JSON, text, HTML, base64), Spreadsheet File (read CSV/XLSX/ODS, write CSV/XLSX), Compression (zip/gzip, size-limited), Read PDF, Crypto (hash, HMAC, generate), Execution Data, RSS Read, Edit Image (resize, information), Read/Write Files (sandboxed), Form (pages, completion).
 
@@ -87,6 +87,12 @@ Read results with `flow.N8NOutputItems(execution.Output)`.
 Loops: Loop Over Items (v3) and any other cycle (e.g. polling: IF → Wait → HTTP → IF) run as one step; nodes inside are not recorded as separate steps.
 
 Waits longer than 65 seconds do not hold a worker: the step is stored as waiting and resumed by the engine (checked every 30 seconds, survives restarts). "Continue on error" settings keep successful items and turn each failing item into an error item, like n8n.
+
+## Service triggers
+
+Slack, Stripe, GitHub, GitLab, Shopify, Typeform, Jotform, HubSpot, Calendly, Cal.com, WooCommerce, Pipedrive, Jira, Webflow, ClickUp, Linear, Trello, Mailchimp, Gumroad and Facebook Lead Ads triggers receive the service's events at `/webhook/{webhookId}` and behave like n8n's: signatures are verified (Slack, Stripe, GitHub, Typeform, Shopify, Calendly, Linear, Webflow v2, Trello, Cal.com, …), handshakes are answered (Slack `url_verification`, Facebook `hub.challenge`, Trello/Mailchimp validation), events are filtered by the node's settings and the items have n8n's shape (e.g. Typeform's simplified answers, Slack's `event`, GitHub's `{body, headers, query}`).
+
+Pass `WebhookBaseURL` (the public URL `N8NHandler` is mounted at) to `InstallN8NWorkflow` to create the webhooks in the services, as n8n does on activation: GitHub, GitLab, Stripe, Typeform, Shopify, Calendly, Cal.com, WooCommerce, Pipedrive, ClickUp, Linear and Gumroad. Their ids and signing secrets are kept in `PollState`; `UnregisterN8NWebhooks` deletes them. Slack, Jotform, HubSpot, Jira, Webflow, Trello, Mailchimp and Facebook Lead Ads are listed in the result as `Manual`: enter the URL in the service's webhook settings. GitHub deliveries are only accepted with the secret created at registration.
 
 ## Community nodes
 
