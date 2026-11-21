@@ -1,0 +1,47 @@
+{
+  "name": "Webhook echo",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "path": "studio-echo",
+        "httpMethod": "POST",
+        "responseMode": "lastNode"
+      },
+      "webhookId": "studio-echo"
+    },
+    {
+      "id": "build-reply",
+      "name": "Build reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const body = $json.body || {};\nreturn [{ json: {\n  hello: body.name ? `Hello, ${body.name}!` : 'Hello, stranger!',\n  received: body,\n  keys: Object.keys(body).length,\n  at: DateTime.now().toISO(),\n}}];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

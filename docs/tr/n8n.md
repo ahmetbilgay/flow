@@ -6,6 +6,9 @@ Flow, [n8n](https://n8n.io) workflow export'larını içe aktarıp çalıştıra
 
 ## Hızlı başlangıç
 
+Workflow'ları tarayıcıda denemek için `go run ./examples/n8n_studio` çalıştırıp http://localhost:8080 adresini açın: örnek, dosya ya da galeri şablonu yükleyin, uyumluluk raporunu grafik olarak görün, credential girin, çalıştırın ve her adımı inceleyin.
+
+
 ```go
 eng := flow.NewEngine(storage, flow.NewRegistry())
 

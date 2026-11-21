@@ -6,6 +6,9 @@ Measured on the **entire public n8n template gallery (14,314 templates), 12,371 
 
 ## Quick start
 
+To try workflows in the browser first, run `go run ./examples/n8n_studio` and open http://localhost:8080: load a sample, a file or any gallery template, see the compatibility report as a graph, add credentials, run it and inspect every step.
+
+
 ```go
 eng := flow.NewEngine(storage, flow.NewRegistry())
 

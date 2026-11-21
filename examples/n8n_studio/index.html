@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>n8n Studio</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --line: #e2e5ea; --text: #1d2330; --muted: #677085;
+  --accent: #ff6d5a; --accent-ink: #ffffff; --ok: #1f9d63; --ok-bg: #e5f6ee; --bad: #d64545; --bad-bg: #fcebeb;
+  --warn: #b7791f; --warn-bg: #fdf4e3; --info: #3b6fd8; --info-bg: #e9f0fd; --node: #ffffff; --sticky: #fff6cc; --sticky-line: #eadb8f;
+  --grid: #e9ecf1; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14161b; --panel: #1c1f26; --panel-2: #23272f; --line: #2e333d; --text: #e6e8ec; --muted: #9aa3b2;
+    --ok: #45c48a; --ok-bg: #173327; --bad: #f07272; --bad-bg: #3a1d1f; --warn: #e2b04a; --warn-bg: #3a2f17;
+    --info: #7aa2f7; --info-bg: #1d2a44; --node: #262a33; --sticky: #3a3520; --sticky-line: #5c5330; --grid: #20232a;
+    --shadow: 0 1px 2px rgba(0,0,0,.4); }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 12px; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.ghost { border-color: transparent; background: transparent; }
+input, textarea, select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; width: 100%; }
+textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+code, pre { font-family: var(--mono); font-size: 12px; }
+pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.app { display: grid; grid-template-columns: 300px 1fr; grid-template-rows: 52px 1fr; height: 100vh; }
+header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.logo { width: 26px; height: 26px; border-radius: 7px; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 13px; }
+header h1 { font-size: 15px; margin: 0; }
+header .sub { color: var(--muted); font-size: 13px; }
+aside { border-right: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 18px; }
+main { overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.tabs { display: flex; gap: 2px; background: var(--panel-2); padding: 3px; border-radius: 9px; margin-bottom: 10px; }
+.tabs button { flex: 1; border: 0; background: transparent; padding: 5px 8px; border-radius: 7px; color: var(--muted); }
+.tabs button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 10px; text-align: center; color: var(--muted); font-size: 13px; }
+.drop.over { border-color: var(--accent); color: var(--text); }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.list { display: flex; flex-direction: column; gap: 4px; }
+.item { text-align: left; border: 1px solid transparent; background: transparent; padding: 7px 9px; border-radius: 8px; display: flex; gap: 8px; align-items: center; width: 100%; }
+.item:hover { background: var(--panel-2); }
+.item.on { background: var(--panel-2); border-color: var(--line); }
+.item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.card > .hd { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.card > .bd { padding: 12px 14px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
+.chip.ok { background: var(--ok-bg); color: var(--ok); } .chip.bad { background: var(--bad-bg); color: var(--bad); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); } .chip.info { background: var(--info-bg); color: var(--info); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.COMPLETED { background: var(--ok); } .dot.FAILED, .dot.CANCELLED { background: var(--bad); }
+.dot.RUNNING, .dot.PENDING { background: var(--info); animation: pulse 1s infinite; } .dot.WAITING { background: var(--warn); }
+@keyframes pulse { 50% { opacity: .35; } }
+.title { font-size: 17px; font-weight: 650; margin: 0; }
+.empty { display: grid; place-items: center; text-align: center; padding: 60px 20px; color: var(--muted); }
+.empty h3 { color: var(--text); margin: 0 0 6px; font-size: 18px; }
+#canvas { position: relative; height: 420px; overflow: hidden; background-color: var(--bg); background-image: radial-gradient(var(--grid) 1.2px, transparent 1.2px); background-size: 20px 20px; border-radius: 0 0 12px 12px; cursor: grab; }
+#canvas.drag { cursor: grabbing; }
+#canvas svg { width: 100%; height: 100%; display: block; }
+.legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-left: auto; flex-wrap: wrap; }
+.legend span { display: inline-flex; gap: 5px; align-items: center; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; border: 2px solid; }
+.n rect.box { fill: var(--node); stroke: var(--line); stroke-width: 1.5; }
+.n.ok rect.box { stroke: var(--ok); } .n.bad rect.box { stroke: var(--bad); stroke-dasharray: 5 3; } .n.warn rect.box { stroke: var(--warn); }
+.n.disabled { opacity: .45; }
+.n.sel rect.box { stroke-width: 3; }
+.n text { fill: var(--text); font-size: 12px; pointer-events: none; }
+.n text.ty { fill: var(--muted); font-size: 10.5px; }
+.n .ic { fill: var(--panel-2); } .n text.icx { font-size: 11px; font-weight: 700; fill: var(--muted); }
+.n.st-COMPLETED rect.ring { stroke: var(--ok); } .n.st-FAILED rect.ring { stroke: var(--bad); }
+.n.st-RUNNING rect.ring, .n.st-PENDING rect.ring { stroke: var(--info); animation: pulse 1s infinite; } .n.st-WAITING rect.ring { stroke: var(--warn); }
+rect.ring { fill: none; stroke: transparent; stroke-width: 3; }
+.n .badge { font-size: 10.5px; font-weight: 700; }
+.lk { fill: none; stroke: var(--muted); stroke-width: 1.6; opacity: .7; }
+.lk.ai { stroke-dasharray: 4 4; }
+.lk.hot { stroke: var(--ok); opacity: 1; stroke-width: 2.2; }
+.sticky rect { fill: var(--sticky); stroke: var(--sticky-line); }
+.sticky text { fill: var(--text); font-size: 12px; opacity: .8; }
+.issues { display: flex; flex-direction: column; gap: 6px; }
+.issue { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+.issue.bad { background: var(--bad-bg); } .issue.warn { background: var(--warn-bg); } .issue.info { background: var(--info-bg); }
+.issue b { white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel-2); }
+tr.on td { background: var(--panel-2); }
+.items { max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.items table td { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.json { background: var(--panel-2); border-radius: 8px; padding: 10px; max-height: 380px; overflow: auto; }
+.err { color: var(--bad); }
+.split { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 14px; }
+.chat { display: flex; flex-direction: column; height: 340px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.chat .msgs { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: var(--panel-2); }
+.msg { max-width: 78%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; }
+.msg.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.chat form { display: flex; gap: 8px; padding: 8px; border-top: 1px solid var(--line); background: var(--panel); }
+.toast { position: fixed; right: 16px; bottom: 16px; padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--bg); box-shadow: var(--shadow); max-width: 420px; z-index: 10; }
+.toast.err { background: var(--bad); color: #fff; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.ports { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 52px auto 1fr; height: auto; }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  .split { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">n8</div>
+    <h1>n8n Studio</h1>
+    <span class="sub">n8n workflows on the flow engine</span>
+    <span class="grow"></span>
+    <a class="small muted" href="https://github.com/dgmos/flow/blob/main/docs/n8n.md" target="_blank" rel="noopener">docs</a>
+  </header>
+
+  <aside>
+    <section>
+      <h2>Load a workflow</h2>
+      <div class="tabs" id="loadTabs">
+        <button data-t="samples" class="on">Samples</button>
+        <button data-t="paste">Paste / file</button>
+        <button data-t="gallery">Gallery</button>
+      </div>
+      <div data-p="samples" class="list" id="samples"><span class="muted small">Loading…</span></div>
+      <div data-p="paste" class="stack" hidden>
+        <div class="drop" id="drop">Drop an n8n .json export here or <label style="color:var(--accent);cursor:pointer">browse<input type="file" id="file" accept=".json,application/json" hidden></label></div>
+        <textarea id="paste" rows="8" placeholder='{"nodes": [...], "connections": {...}}'></textarea>
+        <button class="primary" id="checkPaste">Check workflow</button>
+      </div>
+      <div data-p="gallery" class="stack" hidden>
+        <p class="small muted" style="margin:0">Load any template from <a href="https://n8n.io/workflows" target="_blank" rel="noopener">n8n.io/workflows</a> by its number (the digits in its URL).</p>
+        <div class="row"><input id="galleryId" class="grow" placeholder="e.g. 2462" inputmode="numeric"><button class="primary" id="loadGallery">Load</button></div>
+      </div>
+    </section>
+    <section>
+      <h2>Installed</h2>
+      <div class="list" id="installed"><span class="muted small">Nothing installed yet.</span></div>
+    </section>
+    <section>
+      <h2>Credentials set</h2>
+      <div id="credList" class="small muted">None.</div>
+    </section>
+  </aside>
+
+  <main id="main">
+    <div class="empty card" id="welcome">
+      <div>
+        <h3>Try an n8n workflow</h3>
+        <p>Pick a sample on the left, paste an export, or load a template from the n8n gallery.<br>
+        You'll see which nodes are supported, then install it, run it and inspect every step.</p>
+      </div>
+    </div>
+    <div id="view" hidden>
+      <div class="card">
+        <div class="hd">
+          <div class="grow" style="min-width:0">
+            <p class="title" id="wfName"></p>
+            <div class="row small" id="wfChips" style="margin-top:4px"></div>
+          </div>
+          <div class="row">
+            <select id="triggerSel" style="width:auto" title="Trigger"></select>
+            <button id="installBtn" class="primary">Install</button>
+            <button id="runBtn" disabled>▶ Run</button>
+          </div>
+        </div>
+        <div class="hd small" style="border-bottom:0;padding-bottom:0">
+          <span class="muted">Drag to pan · scroll to zoom · click a node for details</span>
+          <div class="legend">
+            <span><i style="border-color:var(--ok)"></i>supported</span>
+            <span><i style="border-color:var(--warn)"></i>with notes</span>
+            <span><i style="border-color:var(--bad);border-style:dashed"></i>unsupported</span>
+            <button class="ghost small" id="fitBtn">Fit</button>
+          </div>
+        </div>
+        <div id="canvas"><svg id="svg"></svg></div>
+      </div>
+
+      <div class="card">
+        <div class="hd" style="padding-bottom:0;border-bottom:0">
+          <div class="tabs" id="mainTabs" style="margin:0;flex:1;max-width:560px">
+            <button data-t="report" class="on">Report</button>
+            <button data-t="run">Run</button>
+            <button data-t="try">Try it</button>
+            <button data-t="history">Executions</button>
+            <button data-t="node">Node</button>
+          </div>
+        </div>
+        <div class="bd">
+          <div data-p="report" id="report"></div>
+          <div data-p="run" hidden>
+            <div class="split">
+              <div class="stack">
+                <label class="small muted">Input items for the trigger (optional JSON array)</label>
+                <textarea id="runItems" rows="6" placeholder='[{"name": "Ada"}]'></textarea>
+                <button class="primary" id="runBtn2">▶ Run workflow</button>
+                <div id="runStatus" class="small"></div>
+              </div>
+              <div id="runResult" class="stack"><div class="muted small">Run the workflow to see each step here.</div></div>
+            </div>
+          </div>
+          <div data-p="try" hidden id="try"></div>
+          <div data-p="history" hidden id="history"></div>
+          <div data-p="node" hidden id="nodePanel"><div class="muted small">Click a node in the graph.</div></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+'use strict';
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const SVGNS = 'http://www.w3.org/2000/svg';
+const DONE = ['COMPLETED', 'FAILED', 'CANCELLED'];
+
+const state = {
+  source: null,      // raw n8n workflow JSON currently shown
+  check: null,       // {id, name, report, graph}
+  installedId: null, // id when the current workflow is installed
+  endpoints: [],
+  exec: null,        // last execution detail
+  stepByNode: {},
+  selected: null,
+  view: { x: 0, y: 0, w: 1000, h: 400 },
+  chatSession: Math.random().toString(36).slice(2),
+};
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body && JSON.stringify(opts.body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(data.error || res.statusText); e.data = data; throw e; }
+  return data;
+}
+let toastTimer;
+function toast(msg, err) {
+  let t = $('.toast'); if (!t) { t = document.createElement('div'); document.body.append(t); }
+  t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.remove(), err ? 6000 : 2500);
+}
+function tabs(root, onChange) {
+  $$('button', root).forEach(b => b.onclick = () => select(b.dataset.t));
+  function select(t) {
+    $$('button', root).forEach(b => b.classList.toggle('on', b.dataset.t === t));
+    const scope = root.parentElement.closest('section, .card') || document;
+    $$('[data-p]', scope).forEach(p => { if ($$('button', root).some(b => b.dataset.t === p.dataset.p)) p.hidden = p.dataset.p !== t; });
+    onChange && onChange(t);
+  }
+  return select;
+}
+tabs($('#loadTabs'));
+const mainTab = tabs($('#mainTabs'), t => { if (t === 'history') loadHistory(); });
+
+// ---------------------------------------------------------------- loading
+async function loadSamples() {
+  const list = await api('/api/samples');
+  $('#samples').innerHTML = '';
+  list.forEach(s => {
+    const b = document.createElement('button');
+    b.className = 'item';
+    b.innerHTML = `<span class="dot"></span><span class="t">${esc(s.name || s.file)}</span>`;
+    b.onclick = () => { $$('#samples .item').forEach(x => x.classList.remove('on')); b.classList.add('on'); check(s.workflow); };
+    $('#samples').append(b);
+  });
+}
+$('#checkPaste').onclick = () => {
+  let wf; try { wf = JSON.parse($('#paste').value); } catch (e) { return toast('That is not valid JSON: ' + e.message, true); }
+  check(wf);
+};
+$('#file').onchange = e => e.target.files[0] && readFile(e.target.files[0]);
+const drop = $('#drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && readFile(e.dataTransfer.files[0]); };
+function readFile(f) { f.text().then(t => { $('#paste').value = t; $('#checkPaste').click(); }); }
+$('#loadGallery').onclick = async () => {
+  const id = $('#galleryId').value.trim();
+  if (!/^\d+$/.test(id)) return toast('Enter the template number', true);
+  $('#loadGallery').disabled = true;
+  try { const r = await api('/api/gallery/' + id); await check(r.workflow); toast('Loaded “' + r.name + '”'); }
+  catch (e) { toast(e.message, true); }
+  finally { $('#loadGallery').disabled = false; }
+};
+$('#galleryId').onkeydown = e => { if (e.key === 'Enter') $('#loadGallery').click(); };
+
+async function check(wf) {
+  try {
+    const r = await api('/api/check', { method: 'POST', body: { workflow: wf } });
+    state.source = wf; state.check = r; state.exec = null; state.stepByNode = {}; state.selected = null;
+    state.installedId = installedIds.has(r.id) ? r.id : null;
+    state.endpoints = [];
+    if (state.installedId) await refreshEndpoints();
+    render(true);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------------------------------------------------------- installed list & credentials
+let installedIds = new Set();
+async function loadInstalled() {
+  const list = await api('/api/workflows');
+  installedIds = new Set(list.map(w => w.id));
+  const el = $('#installed');
+  if (!list.length) { el.innerHTML = '<span class="muted small">Nothing installed yet.</span>'; return; }
+  el.innerHTML = '';
+  list.forEach(w => {
+    const b = document.createElement('button');
+    b.className = 'item' + (w.id === state.installedId ? ' on' : '');
+    b.innerHTML = `<span class="dot ${w.report.runnable ? 'COMPLETED' : 'WAITING'}"></span><span class="t">${esc(w.name || w.id)}</span><span class="small muted">${w.graph.nodes.filter(n => !n.sticky).length}</span>`;
+    b.onclick = async () => {
+      state.check = { id: w.id, name: w.name, report: w.report, graph: w.graph };
+      state.source = null; state.installedId = w.id; state.exec = null; state.stepByNode = {}; state.selected = null;
+      await refreshEndpoints(); render(true); loadInstalled();
+    };
+    el.append(b);
+  });
+}
+async function loadCreds() {
+  const list = await api('/api/credentials');
+  $('#credList').innerHTML = list.length ? list.map(t => `<span class="chip ok" style="margin:0 4px 4px 0">🔑 ${esc(t)}</span>`).join('') : 'None.';
+  return list;
+}
+async function refreshEndpoints() {
+  try { state.endpoints = (await api('/api/workflows/' + encodeURIComponent(state.installedId))).endpoints || []; } catch { state.endpoints = []; }
+}
+
+// ---------------------------------------------------------------- render
+function render(fit) {
+  const c = state.check;
+  $('#welcome').hidden = !!c; $('#view').hidden = !c;
+  if (!c) return;
+  renderHeader();
+  drawGraph(fit);
+  renderReport();
+  renderTry();
+  if (state.selected) renderNode(state.selected);
+}
+// renderHeader updates the title, chips and buttons only.
+function renderHeader() {
+  const c = state.check, rep = c.report;
+  $('#wfName').textContent = c.name || c.id;
+  const chips = [];
+  chips.push(rep.runnable ? '<span class="chip ok">✓ runnable</span>' : `<span class="chip bad">✗ ${rep.blocking.length} blocking issue${rep.blocking.length === 1 ? '' : 's'}</span>`);
+  chips.push(`<span class="chip">${rep.supportedNodes}/${rep.nodes} nodes supported</span>`);
+  if (rep.warnings?.length) chips.push(`<span class="chip warn">${rep.warnings.length} note${rep.warnings.length === 1 ? '' : 's'}</span>`);
+  if (rep.credentials?.length) chips.push(`<span class="chip info">🔑 ${new Set(rep.credentials.map(x => x.type)).size} credential type(s)</span>`);
+  if (state.installedId) chips.push('<span class="chip ok">installed</span>');
+  if (state.exec) chips.push(`<span class="chip ${state.exec.execution.status === 'COMPLETED' ? 'ok' : state.exec.execution.status === 'FAILED' ? 'bad' : 'info'}"><span class="dot ${state.exec.execution.status}"></span>last run: ${state.exec.execution.status.toLowerCase()}</span>`);
+  $('#wfChips').innerHTML = chips.join('');
+
+  const sel = $('#triggerSel');
+  const triggers = rep.triggers || [];
+  sel.innerHTML = triggers.map(t => `<option value="${esc(t.node)}" ${t.default ? 'selected' : ''}>${esc(t.node)} · ${esc(t.kind)}</option>`).join('') || '<option value="">(no trigger)</option>';
+  sel.hidden = triggers.length < 2;
+  $('#installBtn').textContent = state.installedId ? 'Reinstall' : 'Install';
+  $('#installBtn').disabled = !state.source && !!state.installedId;
+  $('#runBtn').disabled = $('#runBtn2').disabled = !state.installedId;
+}
+
+// ---------------------------------------------------------------- graph
+const NW = 170, NH = 56;
+function center(n) { return { x: n.x + 50, y: n.y + 50 }; }
+function shortType(t) { return String(t).replace(/^@?[^.]*\./, '').replace(/^n8n-nodes-/, ''); }
+function initials(n) {
+  const s = shortType(n.type).replace(/Trigger$|Tool$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s._-]+/).filter(Boolean);
+  return ((s[0] || '?')[0] + (s[1] ? s[1][0] : (s[0] || '')[1] || '')).toUpperCase();
+}
+function drawGraph(fit) {
+  const svg = $('#svg'); svg.innerHTML = '';
+  const g = state.check.graph;
+  const byName = Object.fromEntries(g.nodes.map(n => [n.name, n]));
+  const stickies = document.createElementNS(SVGNS, 'g'), links = document.createElementNS(SVGNS, 'g'), nodesG = document.createElementNS(SVGNS, 'g');
+  svg.append(stickies, links, nodesG);
+
+  g.nodes.filter(n => n.sticky).forEach(n => {
+    const el = document.createElementNS(SVGNS, 'g'); el.setAttribute('class', 'sticky');
+    el.innerHTML = `<rect x="${n.x}" y="${n.y}" width="${n.sticky.w}" height="${n.sticky.h}" rx="8"></rect>`;
+    const text = String(n.parameters?.content || '').replace(/[#*_>`]/g, '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, Math.max(1, Math.floor((n.sticky.h - 16) / 17)));
+    text.forEach((line, i) => {
+      const t = document.createElementNS(SVGNS, 'text');
+      t.setAttribute('x', n.x + 10); t.setAttribute('y', n.y + 22 + i * 17);
+      t.textContent = line.length > n.sticky.w / 7 ? line.slice(0, Math.floor(n.sticky.w / 7)) + '…' : line;
+      el.append(t);
+    });
+    stickies.append(el);
+  });
+
+  g.links.forEach(l => {
+    const a = byName[l.from], b = byName[l.to];
+    if (!a || !b) return;
+    const ca = center(a), cb = center(b);
+    const ai = l.kind !== 'main';
+    let d;
+    if (ai) { // sub-nodes plug into the bottom of their parent
+      const x1 = ca.x, y1 = ca.y - NH / 2, x2 = cb.x, y2 = cb.y + NH / 2;
+      d = `M${x1},${y1} C${x1},${y1 - 50} ${x2},${y2 + 50} ${x2},${y2}`;
+    } else {
+      const outs = g.links.filter(x => x.from === l.from && x.kind === 'main').reduce((m, x) => Math.max(m, x.out), 0) + 1;
+      const x1 = ca.x + NW / 2, y1 = ca.y - NH / 2 + NH * (l.out + 1) / (outs + 1), x2 = cb.x - NW / 2, y2 = cb.y;
+      const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+      d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+    }
+    const p = document.createElementNS(SVGNS, 'path');
+    const hot = state.stepByNode[l.from]?.status === 'COMPLETED' && state.stepByNode[l.to];
+    p.setAttribute('d', d); p.setAttribute('class', 'lk' + (ai ? ' ai' : '') + (hot ? ' hot' : ''));
+    links.append(p);
+  });
+
+  g.nodes.filter(n => !n.sticky).forEach(n => {
+    const c = center(n), x = c.x - NW / 2, y = c.y - NH / 2;
+    const cls = ['n', n.supported ? (n.warnings?.length ? 'warn' : 'ok') : 'bad'];
+    if (n.disabled) cls.push('disabled');
+    if (state.selected === n.name) cls.push('sel');
+    const st = state.stepByNode[n.name];
+    if (st) cls.push('st-' + st.status);
+    const el = document.createElementNS(SVGNS, 'g'); el.setAttribute('class', cls.join(' '));
+    const name = n.name.length > 20 ? n.name.slice(0, 19) + '…' : n.name;
+    const ty = shortType(n.type); const tyShort = ty.length > 24 ? ty.slice(0, 23) + '…' : ty;
+    let badge = '';
+    if (st) {
+      const count = (st.outputs || []).reduce((s, p) => s + p.length, 0);
+      const color = st.status === 'FAILED' ? 'var(--bad)' : st.status === 'COMPLETED' ? 'var(--ok)' : 'var(--info)';
+      badge = `<text class="badge" x="${x + NW - 8}" y="${y + NH + 14}" text-anchor="end" fill="${color}">${st.status === 'COMPLETED' ? count + ' item' + (count === 1 ? '' : 's') : st.status.toLowerCase()}</text>`;
+    }
+    el.innerHTML = `<rect class="ring" x="${x - 4}" y="${y - 4}" width="${NW + 8}" height="${NH + 8}" rx="${n.trigger ? 26 : 12}"></rect>
+      <rect class="box" x="${x}" y="${y}" width="${NW}" height="${NH}" rx="${n.trigger ? 24 : 10}"></rect>
+      <rect class="ic" x="${x + 9}" y="${y + 12}" width="32" height="32" rx="8"></rect>
+      <text class="icx" x="${x + 25}" y="${y + 32}" text-anchor="middle">${esc(initials(n))}</text>
+      <text x="${x + 50}" y="${y + 24}">${esc(name)}</text>
+      <text class="ty" x="${x + 50}" y="${y + 40}">${esc(tyShort)}</text>${badge}
+      <title>${esc(n.name + '\n' + n.type + (n.blocking?.length ? '\n✗ ' + n.blocking.join('\n✗ ') : '') + (n.warnings?.length ? '\n! ' + n.warnings.join('\n! ') : ''))}</title>`;
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', e => { e.stopPropagation(); state.selected = n.name; drawGraph(false); renderNode(n.name); mainTab('node'); });
+    nodesG.append(el);
+  });
+  if (fit) fitView();
+  applyView();
+}
+function fitView() {
+  const ns = state.check.graph.nodes;
+  if (!ns.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  ns.forEach(n => {
+    const w = n.sticky ? n.sticky.w : NW, h = n.sticky ? n.sticky.h : NH;
+    const x = n.sticky ? n.x : center(n).x - NW / 2, y = n.sticky ? n.y : center(n).y - NH / 2;
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h + 18);
+  });
+  const pad = 40, box = $('#canvas').getBoundingClientRect();
+  let w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
+  const ratio = box.width / box.height;
+  if (w / h > ratio) h = w / ratio; else w = h * ratio;
+  w = Math.max(w, 1100); h = w / ratio;
+  state.view = { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - h / 2, w, h };
+}
+function applyView() { const v = state.view; $('#svg').setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`); }
+$('#fitBtn').onclick = () => { fitView(); applyView(); };
+(function panZoom() {
+  const cv = $('#canvas'); let drag = null;
+  cv.addEventListener('mousedown', e => { drag = { x: e.clientX, y: e.clientY, v: { ...state.view } }; cv.classList.add('drag'); });
+  window.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const r = cv.getBoundingClientRect(), k = state.view.w / r.width;
+    state.view.x = drag.v.x - (e.clientX - drag.x) * k; state.view.y = drag.v.y - (e.clientY - drag.y) * k; applyView();
+  });
+  window.addEventListener('mouseup', () => { drag = null; cv.classList.remove('drag'); });
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = cv.getBoundingClientRect(), v = state.view;
+    const f = Math.exp(e.deltaY * 0.0015), mx = v.x + (e.clientX - r.left) / r.width * v.w, my = v.y + (e.clientY - r.top) / r.height * v.h;
+    const w = Math.min(Math.max(v.w * f, 200), 20000), h = w * v.h / v.w;
+    state.view = { x: mx - (mx - v.x) * w / v.w, y: my - (my - v.y) * h / v.h, w, h }; applyView();
+  }, { passive: false });
+})();
+window.addEventListener('resize', () => { if (state.check) { fitView(); applyView(); } });
+
+// ---------------------------------------------------------------- report
+async function renderReport() {
+  const rep = state.check.report, el = $('#report');
+  const credsSet = await loadCreds();
+  const sect = (title, body) => `<div style="margin-bottom:16px"><h2>${title}</h2>${body}</div>`;
+  let html = '';
+  if (!rep.runnable) html += sect('Blocking — must be supported before it runs', `<div class="issues">${rep.blocking.map(b => `<div class="issue bad"><b>${esc(b.node || 'workflow')}</b><span>${esc(b.message)}</span></div>`).join('')}</div>`);
+  else html += `<div class="issue info" style="margin-bottom:16px">✓ Every node and feature in this workflow is supported${rep.credentials?.length ? ' — provide the credentials below, then install and run it.' : '. Install and run it.'}</div>`;
+  if (rep.credentials?.length) {
+    const byType = {};
+    rep.credentials.forEach(c => (byType[c.type] = byType[c.type] || []).push(c));
+    html += sect('Credentials', `<div class="stack">${Object.entries(byType).map(([type, list]) => `
+      <details ${credsSet.includes(type) ? '' : 'open'} class="card" style="box-shadow:none">
+        <summary style="padding:8px 12px"><b style="color:var(--text)">${esc(type)}</b> ${credsSet.includes(type) ? '<span class="chip ok">set</span>' : '<span class="chip warn">missing</span>'}
+          <span class="small"> · used by ${list.map(c => esc(c.node)).join(', ')}</span></summary>
+        <div style="padding:0 12px 12px" class="stack">
+          <textarea rows="3" data-cred="${esc(type)}" placeholder='${esc(credHint(type))}'></textarea>
+          <div class="row"><button data-save="${esc(type)}">Save credential</button><span class="small muted">Kept in this server's memory only.</span></div>
+        </div>
+      </details>`).join('')}</div>`);
+  }
+  if (rep.triggers?.length) html += sect('Triggers', `<table><tr><th>Node</th><th>Kind</th><th>Details</th></tr>${rep.triggers.map(t => `<tr><td>${esc(t.node)}${t.default ? ' <span class="chip">default</span>' : ''}</td><td>${esc(t.kind)}</td><td class="small">${esc([t.method, t.path, (t.cron || []).join(', '), t.responseMode].filter(Boolean).join(' · '))}</td></tr>`).join('')}</table>`);
+  if (rep.warnings?.length) html += sect('Notes', `<div class="issues">${rep.warnings.map(w => `<div class="issue warn"><b>${esc(w.node || 'workflow')}</b><span>${esc(w.message)}</span></div>`).join('')}</div>`);
+  el.innerHTML = html;
+  $$('[data-save]', el).forEach(b => b.onclick = async () => {
+    const type = b.dataset.save, ta = $(`textarea[data-cred="${CSS.escape(type)}"]`, el);
+    let data; try { data = JSON.parse(ta.value); } catch { return toast('Credential must be a JSON object', true); }
+    try { await api('/api/credentials', { method: 'POST', body: { type, data } }); toast('Saved ' + type); renderReport(); } catch (e) { toast(e.message, true); }
+  });
+}
+function credHint(type) {
+  const t = type.toLowerCase();
+  if (t.includes('telegram')) return '{"accessToken": "123456:ABC-DEF"}';
+  if (t.includes('oauth')) return '{"accessToken": "..."}';
+  if (t.includes('basic')) return '{"user": "...", "password": "..."}';
+  if (t.includes('postgres') || t.includes('mysql')) return '{"host": "...", "port": 5432, "database": "...", "user": "...", "password": "..."}';
+  return '{"apiKey": "..."}';
+}
+
+// ---------------------------------------------------------------- install & run
+$('#installBtn').onclick = async () => {
+  if (!state.source) return;
+  $('#installBtn').disabled = true;
+  try {
+    const r = await api('/api/install', { method: 'POST', body: { workflow: state.source } });
+    state.installedId = r.workflow.id;
+    if (r.warning) toast(r.warning, true); else toast('Installed “' + (r.workflow.name || r.workflow.id) + '”');
+    await refreshEndpoints(); await loadInstalled(); render(false);
+    if (r.activationExecutions?.length) watch(r.activationExecutions[0]);
+  } catch (e) { toast(e.message, true); }
+  finally { $('#installBtn').disabled = false; }
+};
+async function run() {
+  let items;
+  const raw = $('#runItems').value.trim();
+  if (raw) { try { items = JSON.parse(raw); if (!Array.isArray(items)) items = [items]; } catch (e) { return toast('Input items must be JSON: ' + e.message, true); } }
+  mainTab('run');
+  try {
+    const r = await api(`/api/workflows/${encodeURIComponent(state.installedId)}/run`, { method: 'POST', body: { trigger: $('#triggerSel').value, items } });
+    watch(r.executionId);
+  } catch (e) { toast(e.message, true); }
+}
+$('#runBtn').onclick = run; $('#runBtn2').onclick = run;
+
+let watching = 0;
+async function watch(id) {
+  const token = ++watching;
+  $('#runStatus').innerHTML = `<span class="dot RUNNING" style="display:inline-block"></span> running…`;
+  for (let i = 0; token === watching; i++) {
+    let d; try { d = await api('/api/executions/' + id); } catch (e) { toast(e.message, true); return; }
+    showExecution(d);
+    if (DONE.includes(d.execution.status) || d.execution.status === 'WAITING') return;
+    await new Promise(r => setTimeout(r, i < 10 ? 250 : 800));
+  }
+}
+function showExecution(d) {
+  state.exec = d;
+  state.stepByNode = {};
+  d.steps.forEach(s => { state.stepByNode[s.node] = s; });
+  const e = d.execution;
+  const dur = e.finishedAt ? Math.max(0, new Date(e.finishedAt) - new Date(e.startedAt)) + ' ms' : '';
+  $('#runStatus').innerHTML = `<span class="chip ${e.status === 'COMPLETED' ? 'ok' : e.status === 'FAILED' ? 'bad' : 'info'}"><span class="dot ${e.status}"></span>${esc(e.status.toLowerCase())}</span> <span class="muted">${esc(dur)} · ${esc(e.id.slice(0, 8))}</span>${e.error ? `<div class="err small" style="margin-top:6px">${esc(e.error)}</div>` : ''}`;
+  const rows = d.steps.map(s => {
+    const count = (s.outputs || []).reduce((n, p) => n + p.length, 0);
+    return `<tr class="click" data-node="${esc(s.node)}"><td><span class="dot ${s.status}" style="display:inline-block;margin-right:6px"></span>${esc(s.node)}</td><td>${esc(s.status.toLowerCase())}${s.attempt > 0 ? ` <span class="chip warn">retry ${s.attempt}</span>` : ''}</td><td>${s.durationMs ?? ''}${s.durationMs !== undefined ? ' ms' : ''}</td><td>${s.status === 'COMPLETED' ? count : ''}</td></tr>${s.error ? `<tr><td colspan="4" class="err small">${esc(s.error)}</td></tr>` : ''}`;
+  }).join('');
+  $('#runResult').innerHTML = `<table><tr><th>Step</th><th>Status</th><th>Time</th><th>Items</th></tr>${rows}</table>
+    <div><h2 style="margin-top:8px">Final output</h2>${itemsView([d.output || []])}</div>`;
+  $$('#runResult tr.click').forEach(tr => tr.onclick = () => { state.selected = tr.dataset.node; drawGraph(false); renderNode(tr.dataset.node); mainTab('node'); });
+  renderHeader();
+  drawGraph(false);
+  if (state.selected) renderNode(state.selected);
+}
+
+// itemsView shows items as a table (flat JSON) with a raw JSON toggle.
+function itemsView(ports) {
+  const id = 'iv' + Math.random().toString(36).slice(2);
+  const tabsHtml = ports.length > 1 ? `<div class="ports">${ports.map((p, i) => `<button class="small" data-port="${i}">output ${i} · ${p.length}</button>`).join('')}</div>` : '';
+  setTimeout(() => {
+    const root = document.getElementById(id); if (!root) return;
+    const show = i => {
+      $$('[data-port]', root).forEach(b => b.classList.toggle('primary', +b.dataset.port === i));
+      $('.body', root).innerHTML = table(ports[i] || []);
+    };
+    $$('[data-port]', root).forEach(b => b.onclick = () => show(+b.dataset.port));
+    $('.raw', root).onclick = () => { const b = $('.body', root); b.dataset.raw = b.dataset.raw ? '' : '1'; b.innerHTML = b.dataset.raw ? `<div class="json"><pre>${esc(JSON.stringify(ports, null, 2))}</pre></div>` : table(ports[0] || []); };
+    show(ports.findIndex(p => p.length) >= 0 ? ports.findIndex(p => p.length) : 0);
+  });
+  return `<div id="${id}">${tabsHtml}<div class="body"></div><button class="ghost small raw" style="margin-top:4px">toggle raw JSON</button></div>`;
+}
+function table(items) {
+  if (!items.length) return '<div class="muted small">No items.</div>';
+  const cols = [];
+  items.forEach(it => Object.keys(it.json || {}).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
+  const hasBin = items.some(it => it.binary && Object.keys(it.binary).length);
+  const cell = v => v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return `<div class="items"><table><tr><th>#</th>${cols.map(c => `<th>${esc(c)}</th>`).join('')}${hasBin ? '<th>binary</th>' : ''}</tr>${items.map((it, i) => `<tr><td class="muted">${i}</td>${cols.map(c => `<td title="${esc(cell(it.json[c]))}">${esc(cell(it.json[c]))}</td>`).join('')}${hasBin ? `<td>${Object.entries(it.binary || {}).map(([k, b]) => `📎 ${esc(k)}: ${esc(b.fileName || '')} ${esc(b.mimeType || '')} ${b.fileSize ? esc(b.fileSize) : ''}`).join('<br>')}</td>` : ''}</tr>`).join('')}</table></div>`;
+}
+
+// ---------------------------------------------------------------- node panel
+function renderNode(name) {
+  const n = state.check.graph.nodes.find(x => x.name === name);
+  if (!n) return;
+  const st = state.stepByNode[name];
+  let html = `<div class="row" style="margin-bottom:10px"><p class="title grow">${esc(n.name)}</p>${n.supported ? '<span class="chip ok">supported</span>' : '<span class="chip bad">unsupported</span>'}${n.disabled ? '<span class="chip">disabled</span>' : ''}</div>
+    <div class="kv" style="margin-bottom:12px"><div>Type</div><div><code>${esc(n.type)}</code></div>${n.creds?.length ? `<div>Credentials</div><div>${n.creds.map(esc).join(', ')}</div>` : ''}${n.notes ? `<div>Notes</div><div>${esc(n.notes)}</div>` : ''}</div>`;
+  if (n.blocking?.length) html += `<div class="issues" style="margin-bottom:10px">${n.blocking.map(m => `<div class="issue bad">✗ ${esc(m)}</div>`).join('')}</div>`;
+  if (n.warnings?.length) html += `<div class="issues" style="margin-bottom:10px">${n.warnings.map(m => `<div class="issue warn">! ${esc(m)}</div>`).join('')}</div>`;
+  if (st) {
+    html += `<h2>Last run · ${esc(st.status.toLowerCase())}${st.durationMs !== undefined ? ' · ' + st.durationMs + ' ms' : ''}</h2>`;
+    if (st.error) html += `<div class="issue bad" style="margin-bottom:8px">${esc(st.error)}</div>`;
+    if (st.outputs?.length) html += itemsView(st.outputs);
+  } else if (state.installedId) html += '<div class="muted small" style="margin-bottom:10px">Not run yet (or not reached in the last run).</div>';
+  html += `<details style="margin-top:12px"><summary>Parameters</summary><div class="json" style="margin-top:6px"><pre>${esc(JSON.stringify(n.parameters || {}, null, 2))}</pre></div></details>`;
+  $('#nodePanel').innerHTML = html;
+}
+
+// ---------------------------------------------------------------- try it (chat / webhook)
+function renderTry() {
+  const el = $('#try');
+  if (!state.installedId) { el.innerHTML = '<div class="muted small">Install the workflow to call its webhook or chat endpoints.</div>'; return; }
+  if (!state.endpoints.length) { el.innerHTML = '<div class="muted small">This workflow has no webhook, chat or form trigger. Use the Run tab.</div>'; return; }
+  el.innerHTML = state.endpoints.map((ep, i) => {
+    if (ep.kind === 'chat') return `<div style="margin-bottom:16px"><h2>Chat · ${esc(ep.node)}</h2>
+      <div class="chat" data-i="${i}"><div class="msgs"><div class="msg bot">Send a message to start the workflow.</div></div>
+      <form><input placeholder="Type a message…" autocomplete="off"><button class="primary">Send</button></form></div>
+      <div class="small muted" style="margin-top:6px"><code>POST ${esc(ep.url)}</code></div></div>`;
+    return `<div style="margin-bottom:16px" data-i="${i}" class="hook"><h2>${esc(ep.kind)} · ${esc(ep.node)}</h2>
+      <div class="row" style="margin-bottom:8px"><select style="width:auto" class="m">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === ep.method ? 'selected' : ''}>${m}</option>`).join('')}</select><input class="grow u" value="${esc(ep.url)}" readonly></div>
+      <textarea rows="4" class="b">{"name": "Ada", "plan": "pro"}</textarea>
+      <div class="row" style="margin:8px 0"><button class="primary send">Send request</button><span class="small muted">or <code>curl -X ${esc(ep.method)} ${esc(ep.url)} -H 'Content-Type: application/json' -d '{"name":"Ada"}'</code></span></div>
+      <div class="resp"></div></div>`;
+  }).join('');
+  $$('.chat', el).forEach(box => {
+    const ep = state.endpoints[box.dataset.i], form = $('form', box), input = $('input', box), msgs = $('.msgs', box);
+    const add = (cls, text) => { const m = document.createElement('div'); m.className = 'msg ' + cls; m.textContent = text; msgs.append(m); msgs.scrollTop = msgs.scrollHeight; return m; };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const text = input.value.trim(); if (!text) return;
+      input.value = ''; add('me', text); const wait = add('bot', '…');
+      try {
+        const res = await fetch(ep.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: state.chatSession, chatInput: text }) });
+        const data = await res.json().catch(() => ({}));
+        wait.textContent = res.ok ? (data.output ?? JSON.stringify(data)) : '⚠ ' + (data.error || data.message || res.statusText);
+      } catch (err) { wait.textContent = '⚠ ' + err.message; }
+      refreshLatest();
+    };
+  });
+  $$('.hook', el).forEach(box => {
+    $('.send', box).onclick = async () => {
+      const m = $('.m', box).value, url = $('.u', box).value, body = $('.b', box).value;
+      const out = $('.resp', box); out.innerHTML = '<span class="muted small">Waiting for the workflow…</span>';
+      try {
+        const t0 = performance.now();
+        const res = await fetch(url, { method: m, headers: { 'Content-Type': 'application/json' }, body: m === 'GET' ? undefined : body });
+        const text = await res.text(); let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+        out.innerHTML = `<div class="row small" style="margin-bottom:6px"><span class="chip ${res.ok ? 'ok' : 'bad'}">${res.status}</span><span class="muted">${Math.round(performance.now() - t0)} ms · ${esc(res.headers.get('content-type') || '')}</span></div><div class="json"><pre>${esc(pretty)}</pre></div>`;
+      } catch (err) { out.innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+      refreshLatest();
+    };
+  });
+}
+// After a chat/webhook call, show that execution on the graph.
+async function refreshLatest() {
+  try {
+    const list = await api('/api/executions?workflow=' + encodeURIComponent(state.installedId));
+    if (list[0]) { const d = await api('/api/executions/' + list[0].id); showExecution(d); mainTab('try'); }
+  } catch {}
+}
+
+// ---------------------------------------------------------------- history
+async function loadHistory() {
+  const el = $('#history');
+  if (!state.installedId) { el.innerHTML = '<div class="muted small">Install the workflow to see its executions.</div>'; return; }
+  const list = await api('/api/executions?workflow=' + encodeURIComponent(state.installedId));
+  if (!list.length) { el.innerHTML = '<div class="muted small">No executions yet.</div>'; return; }
+  el.innerHTML = `<table><tr><th>Status</th><th>Started</th><th>Duration</th><th>Trigger</th><th>ID</th></tr>${list.map(e => `<tr class="click ${state.exec?.execution.id === e.id ? 'on' : ''}" data-id="${esc(e.id)}"><td><span class="dot ${e.status}" style="display:inline-block;margin-right:6px"></span>${esc(e.status.toLowerCase())}</td><td>${esc(new Date(e.startedAt).toLocaleTimeString())}</td><td>${e.finishedAt ? Math.max(0, new Date(e.finishedAt) - new Date(e.startedAt)) + ' ms' : ''}</td><td>${esc(e.trigger || 'default')}</td><td class="muted"><code>${esc(e.id.slice(0, 8))}</code></td></tr>${e.error ? `<tr><td></td><td colspan="4" class="err small">${esc(e.error)}</td></tr>` : ''}`).join('')}</table>`;
+  $$('tr.click', el).forEach(tr => tr.onclick = async () => { const d = await api('/api/executions/' + tr.dataset.id); showExecution(d); mainTab('run'); });
+}
+
+loadSamples().catch(e => toast(e.message, true));
+loadInstalled();
+loadCreds();
+</script>
+</body>
+</html>

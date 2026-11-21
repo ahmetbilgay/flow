@@ -1,0 +1,118 @@
+{
+  "name": "Excel round trip (.xls)",
+  "nodes": [
+    {
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "team",
+      "name": "Team",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ],
+      "parameters": {
+        "jsCode": "return [\n  { name: 'Ada', role: 'engineer', since: 2019, remote: true },\n  { name: 'Linus', role: 'maintainer', since: 2015, remote: false },\n  { name: 'Grace', role: 'admiral', since: 2012, remote: true },\n].map(json => ({ json }));"
+      }
+    },
+    {
+      "id": "to-.xls",
+      "name": "To .xls",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "operation": "xls",
+        "options": {
+          "sheetName": "Team",
+          "fileName": "team.xls"
+        }
+      }
+    },
+    {
+      "id": "read-.xls-back",
+      "name": "Read .xls back",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        660,
+        200
+      ],
+      "parameters": {
+        "operation": "xls"
+      }
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{ json: {\n  people: rows.length,\n  remote: rows.filter(r => r.remote === 'TRUE').map(r => r.name),\n  avgTenure: Math.round(rows.reduce((s, r) => s + (2026 - Number(r.since)), 0) / rows.length),\n}}];"
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Team": {
+      "main": [
+        [
+          {
+            "node": "To .xls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To .xls": {
+      "main": [
+        [
+          {
+            "node": "Read .xls back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read .xls back": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

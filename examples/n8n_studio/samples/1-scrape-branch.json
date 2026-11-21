@@ -1,0 +1,150 @@
+{
+  "name": "Scrape & branch (cheerio + IF)",
+  "nodes": [
+    {
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "scrape-products",
+      "name": "Scrape products",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const html = `\n<ul id=\"shop\">\n  <li data-sku=\"A1\"><b>Apple</b> <span class=\"price\">1.20</span></li>\n  <li data-sku=\"B7\"><b>Banana</b> <span class=\"price\">0.45</span></li>\n  <li data-sku=\"C3\"><b>Cherry</b> <span class=\"price\">4.90</span></li>\n  <li data-sku=\"D2\"><b>Dragon fruit</b> <span class=\"price\">6.10</span></li>\n</ul>`;\nconst cheerio = require('cheerio');\nconst $ = cheerio.load(html);\nreturn $('#shop li').map((i, el) => ({ json: {\n  sku: $(el).data('sku'),\n  name: $(el).find('b').text(),\n  price: Number($(el).find('.price').text()),\n}})).get();"
+      }
+    },
+    {
+      "id": "price->-2?",
+      "name": "Price > 2?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.price }}",
+              "operation": "larger",
+              "value2": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "premium",
+      "name": "Premium",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        80
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a",
+              "name": "tier",
+              "type": "string",
+              "value": "premium"
+            },
+            {
+              "id": "b",
+              "name": "label",
+              "type": "string",
+              "value": "={{ $json.name }} — {{ $json.price.toFixed(2) }} €"
+            }
+          ]
+        },
+        "includeOtherFields": true
+      }
+    },
+    {
+      "id": "budget",
+      "name": "Budget",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        320
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a",
+              "name": "tier",
+              "type": "string",
+              "value": "budget"
+            },
+            {
+              "id": "b",
+              "name": "discounted",
+              "type": "number",
+              "value": "={{ Math.round($json.price * 90) / 100 }}"
+            }
+          ]
+        },
+        "includeOtherFields": true
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Scrape products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape products": {
+      "main": [
+        [
+          {
+            "node": "Price > 2?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Price > 2?": {
+      "main": [
+        [
+          {
+            "node": "Premium",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
