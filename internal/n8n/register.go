@@ -128,6 +128,7 @@ func nodeTypes() map[string]nodeFunc {
 		b + "jwt":                          jwtNode,
 		b + "ssh":                          sshNode,
 		b + "ftp":                          ftpNode,
+		b + "microsoftSql":                 microsoftSQLNode,
 		b + "evaluationTrigger":            passthrough,
 		b + "evaluation":                   evaluationNode,
 		b + "mongoDb":                      mongoDbNode,

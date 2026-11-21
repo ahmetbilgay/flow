@@ -665,7 +665,7 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 	case "dataTable":
 		rep.warn(n, "data tables use Options.DataTables (process memory by default); a table that does not exist yet is created on first use")
 		checkResourceOps(n, typ, get, rep)
-	case "hubspot", "googleGemini", "anthropic", "perplexity", "apify", "ssh":
+	case "hubspot", "googleGemini", "anthropic", "perplexity", "apify", "ssh", "microsoftSql":
 		checkResourceOps(n, typ, get, rep)
 	case "form":
 		if op := toString(get("operation")); op == "" || op == "page" {
@@ -1057,8 +1057,9 @@ var resourceOps = map[string]struct {
 		"text": "message", "image": "analyze generate edit", "video": "analyze generate download", "audio": "analyze transcribe", "document": "analyze", "file": "upload"}},
 	"anthropic": {"text", map[string]string{"text": "message", "image": "analyze", "document": "analyze", "file": "upload"}, map[string]string{
 		"text": "message", "image": "analyze", "document": "analyze", "file": "upload get list delete deleteFile"}},
-	"perplexity": {"chat", map[string]string{"chat": "complete"}, map[string]string{"chat": "complete"}},
-	"ssh":        {"command", map[string]string{"command": "execute", "file": "upload"}, map[string]string{"command": "execute"}},
+	"perplexity":   {"chat", map[string]string{"chat": "complete"}, map[string]string{"chat": "complete"}},
+	"ssh":          {"command", map[string]string{"command": "execute", "file": "upload"}, map[string]string{"command": "execute"}},
+	"microsoftSql": {"", map[string]string{"": "insert"}, map[string]string{"": "executeQuery"}},
 	"apify": {"Actors", map[string]string{"Actors": "Run actor", "Actor tasks": "Run task", "Actor runs": "Get user runs list", "Datasets": "Get items", "Key-Value Stores": "Get Key-Value Store Record",
 		"actor": "run", "dataset": "getItems"}, map[string]string{
 		"Actors":           "Run actor|Run actor and get dataset|Scrape single URL|Get last run|Get list of actors",
