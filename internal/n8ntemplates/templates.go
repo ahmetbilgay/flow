@@ -9,13 +9,19 @@
 package n8ntemplates
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -275,18 +281,13 @@ func Build(id string, raw map[string]interface{}, now time.Time) (*Template, boo
 	if _, ok := wf["name"]; !ok {
 		wf["name"] = name
 	}
-	delete(wf, "pinData") // sample data captured by the author
-	data, _ := json.Marshal(wf)
-	_, rep, err := flow.ImportN8NWorkflow(data, flow.N8NImportOptions{ID: "n8n-" + id})
-	if err != nil {
-		return nil, false, fmt.Errorf("import: %w", err)
-	}
 	t := &Template{
 		Source: "n8n", SourceID: id, SourceURL: "https://n8n.io/workflows/" + id,
 		Name: name, Description: str(meta["description"]), TotalViews: int(num(meta["totalViews"])), CreatedAt: str(meta["createdAt"]),
-		Runnable: rep.Runnable, Nodes: rep.Nodes, SupportedNodes: rep.Supported,
-		Credentials: []Credential{}, Warnings: rep.Warnings, Blocking: rep.Blocking,
-		Workflow: wf, FetchedAt: now.Format(time.RFC3339),
+		FetchedAt: now.Format(time.RFC3339), Categories: []string{},
+	}
+	if err := t.check(wf, "n8n-"+id); err != nil {
+		return nil, false, err
 	}
 	for _, c := range asList(meta["categories"]) {
 		if n := str(asMap(c)["name"]); n != "" {
@@ -296,6 +297,21 @@ func Build(id string, raw map[string]interface{}, now time.Time) (*Template, boo
 	if u := asMap(meta["user"]); len(u) > 0 {
 		t.Author = &Author{Name: str(u["name"]), Username: str(u["username"])}
 	}
+	return t, false, nil
+}
+
+// check runs flow's importer on wf and fills the template's workflow,
+// report, accounts and setup fields.
+func (t *Template) check(wf map[string]interface{}, id string) error {
+	delete(wf, "pinData") // sample data captured by the author
+	data, _ := json.Marshal(wf)
+	_, rep, err := flow.ImportN8NWorkflow(data, flow.N8NImportOptions{ID: id})
+	if err != nil {
+		return fmt.Errorf("import: %w", err)
+	}
+	t.Workflow = wf
+	t.Runnable, t.Nodes, t.SupportedNodes = rep.Runnable, rep.Nodes, rep.Supported
+	t.Credentials, t.Warnings, t.Blocking = []Credential{}, rep.Warnings, rep.Blocking
 	types := map[string]bool{}
 	for _, n := range asList(wf["nodes"]) {
 		if ty := str(asMap(n)["type"]); ty != "" && ty != "n8n-nodes-base.stickyNote" {
@@ -314,13 +330,10 @@ func Build(id string, raw map[string]interface{}, now time.Time) (*Template, boo
 	}
 	t.SetupFields = setupFields(wf)
 	t.NeedsAccount = needsAccount(wf)
-	if t.Categories == nil {
-		t.Categories = []string{}
-	}
 	if t.Triggers == nil {
 		t.Triggers = []Trigger{}
 	}
-	return t, false, nil
+	return nil
 }
 
 // ---------------------------------------------------------------- setup fields
@@ -673,4 +686,79 @@ func (c *Client) Template(ctx context.Context, id string) (*Template, error) {
 		return nil, errors.New("paid template")
 	}
 	return t, err
+}
+
+// ---------------------------------------------------------------- local folders
+
+// LoadDir reads the n8n workflow exports in a folder tree (.json, and .txt
+// files holding JSON) and checks each like a gallery template. Files that
+// are not workflows are skipped; workflows with the same nodes are kept
+// once. The first folder level becomes the category, the file's path the
+// id.
+func LoadDir(dir string, now time.Time) ([]Template, error) {
+	var out []Template
+	seen := map[string]bool{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if n := d.Name(); p != dir && (strings.HasPrefix(n, ".") || n == "__MACOSX") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if ext := strings.ToLower(filepath.Ext(p)); ext != ".json" && ext != ".txt" {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > 10<<20 {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		var wf map[string]interface{}
+		if json.Unmarshal(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), &wf) != nil || asList(wf["nodes"]) == nil {
+			return nil
+		}
+		sig := nodeSignature(wf)
+		if seen[sig] {
+			return nil
+		}
+		seen[sig] = true
+		rel, _ := filepath.Rel(dir, p)
+		rel = filepath.ToSlash(rel)
+		name := str(wf["name"])
+		if name == "" {
+			name = strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+			wf["name"] = name
+		}
+		t := Template{Source: "local", SourceID: sig[:16], SourceURL: rel, Name: name, Categories: []string{}, FetchedAt: now.Format(time.RFC3339)}
+		if i := strings.Index(rel, "/"); i > 0 {
+			t.Categories = append(t.Categories, strings.ReplaceAll(rel[:i], "_", " "))
+		}
+		if err := t.check(wf, "local-"+sig[:16]); err != nil {
+			return nil
+		}
+		out = append(out, t)
+		return nil
+	})
+	sort.SliceStable(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out, err
+}
+
+// nodeSignature identifies a workflow by its nodes' types and names.
+func nodeSignature(wf map[string]interface{}) string {
+	var parts []string
+	for _, n := range asList(wf["nodes"]) {
+		m := asMap(n)
+		if ty := str(m["type"]); ty != "n8n-nodes-base.stickyNote" {
+			parts = append(parts, ty+"\x00"+str(m["name"]))
+		}
+	}
+	sort.Strings(parts)
+	h := sha1.Sum([]byte(strings.Join(parts, "\x01")))
+	return hex.EncodeToString(h[:])
 }

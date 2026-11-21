@@ -167,9 +167,10 @@ Provide durable `ChatMemory`, `PollState` and `DataTables` implementations when 
 go run ./cmd/n8n-templates -ids 2462,3050 -out templates.json
 go run ./cmd/n8n-templates -all -min-views 5000 -limit 200 -out templates.json
 go run ./cmd/n8n-templates -all -category "AI Chatbot" -out ai.json
+go run ./cmd/n8n-templates -dir ./my-workflows -out local.json   # your own n8n exports
 ```
 
-Each entry carries `source_id`, `source_url`, `name`, `description`, `categories`, `author`, `total_views`, `node_types`, `runnable`, `credential_types` and `credentials` (as named in the template), `needs_account` (service nodes whose credential the author removed: the user connects an account for each), `triggers`, `setup_fields` (parameters pointing at the author's sheets, channels or IDs, and placeholders such as `YOUR_API_KEY` or `{{ voice id }}`, each with its node, parameter path and reason) and the `workflow` itself (without the author's pinned sample data). n8n Studio's Market tab uses the same code to browse the gallery. Templates are written by their authors on n8n.io: check n8n's terms and the authors' rights before offering them in a product.
+Each entry carries `source_id`, `source_url`, `name`, `description`, `categories`, `author`, `total_views`, `node_types`, `runnable`, `credential_types` and `credentials` (as named in the template), `needs_account` (service nodes whose credential the author removed: the user connects an account for each), `triggers`, `setup_fields` (parameters pointing at the author's sheets, channels or IDs, and placeholders such as `YOUR_API_KEY` or `{{ voice id }}`, each with its node, parameter path and reason) and the `workflow` itself (without the author's pinned sample data). n8n Studio's Market tab uses the same code to browse the gallery, and `-templates-dir` adds a folder of your own exports as a second source (`-dir` reads `.json` and `.txt` exports in a folder tree, keeps workflows with the same nodes once and takes the first folder level as the category). Templates are written by their authors on n8n.io: check n8n's terms and the authors' rights before offering them in a product.
 
 ## Measuring compatibility
 

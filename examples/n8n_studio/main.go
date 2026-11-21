@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +48,7 @@ type server struct {
 	base  string // public URL of the n8n handler, for webhook URLs
 
 	market *n8ntemplates.Client
+	local  []n8ntemplates.Template // from -templates-dir
 
 	mu        sync.Mutex
 	workflows map[string]*installed
@@ -99,6 +101,7 @@ type graphLink struct {
 func main() {
 	addr := flag.String("addr", "localhost:8080", "listen address")
 	public := flag.String("public-url", "", "public base URL (default http://<addr>)")
+	tplDir := flag.String("templates-dir", "", "also offer the n8n workflow exports in this folder in the Market (source: local)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -122,6 +125,14 @@ func main() {
 		credTypes: map[string]bool{},
 		market:    &n8ntemplates.Client{HTTP: &http.Client{Timeout: 20 * time.Second}},
 	}
+	if *tplDir != "" {
+		local, err := n8ntemplates.LoadDir(*tplDir, time.Now().UTC())
+		if err != nil {
+			log.Fatalf("templates-dir: %v", err)
+		}
+		s.local = local
+		log.Printf("loaded %d local templates from %s", len(local), *tplDir)
+	}
 	s.eng.EnableN8N(flow.N8NOptions{
 		Credentials:   s.creds,
 		ResumeBaseURL: s.base,
@@ -141,6 +152,7 @@ func main() {
 	mux.HandleFunc("GET /api/gallery/{id}", s.gallery)
 	mux.HandleFunc("GET /api/market", s.marketList)
 	mux.HandleFunc("GET /api/market/{id}", s.marketTemplate)
+	mux.HandleFunc("GET /api/market/local/{id}", s.localTemplate)
 	mux.HandleFunc("POST /api/check", s.check)
 	mux.HandleFunc("POST /api/install", s.install)
 	mux.HandleFunc("GET /api/workflows", s.list)
@@ -253,12 +265,65 @@ func (s *server) gallery(w http.ResponseWriter, r *http.Request) {
 func (s *server) marketList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
+	if q.Get("source") == "local" {
+		writeJSON(w, 200, map[string]any{"page": s.localPage(page, q.Get("q"), q.Get("category")), "local_count": len(s.local)})
+		return
+	}
 	p, err := s.market.List(r.Context(), n8ntemplates.ListOptions{Page: page, Rows: 20, Search: q.Get("q"), Category: q.Get("category")})
 	if err != nil {
 		fail(w, 502, "gallery: %v", err)
 		return
 	}
-	writeJSON(w, 200, p)
+	writeJSON(w, 200, map[string]any{"page": p, "local_count": len(s.local)})
+}
+
+// localPage filters and pages the local templates like the gallery.
+func (s *server) localPage(page int, q, category string) *n8ntemplates.Page {
+	if page < 1 {
+		page = 1
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	counts := map[string]int{}
+	var hits []n8ntemplates.Template
+	for _, t := range s.local {
+		for _, c := range t.Categories {
+			counts[c]++
+		}
+		if q != "" && !strings.Contains(strings.ToLower(t.Name+" "+strings.Join(t.NodeTypes, " ")), q) {
+			continue
+		}
+		if category != "" && !slices.Contains(t.Categories, category) {
+			continue
+		}
+		hits = append(hits, t)
+	}
+	p := &n8ntemplates.Page{Total: len(hits), Templates: []n8ntemplates.Summary{}, Categories: []n8ntemplates.CategoryCount{}}
+	for c, n := range counts {
+		p.Categories = append(p.Categories, n8ntemplates.CategoryCount{Name: c, Count: n})
+	}
+	sort.Slice(p.Categories, func(i, j int) bool { return p.Categories[i].Count > p.Categories[j].Count })
+	for i := (page - 1) * 20; i < len(hits) && i < page*20; i++ {
+		t := hits[i]
+		sum := n8ntemplates.Summary{ID: t.SourceID, Name: t.Name, Services: []string{}}
+		if !t.Runnable {
+			sum.Description = "not runnable"
+		}
+		for _, ty := range t.NodeTypes {
+			sum.Services = append(sum.Services, ty[strings.LastIndex(ty, ".")+1:])
+		}
+		p.Templates = append(p.Templates, sum)
+	}
+	return p
+}
+
+func (s *server) localTemplate(w http.ResponseWriter, r *http.Request) {
+	for _, t := range s.local {
+		if t.SourceID == r.PathValue("id") {
+			writeJSON(w, 200, t)
+			return
+		}
+	}
+	fail(w, 404, "local template not found")
 }
 
 // marketTemplate fetches one template and checks it: whether it runs, the

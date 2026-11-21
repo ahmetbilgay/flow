@@ -5,6 +5,7 @@ A small web UI for trying n8n workflows on the flow engine.
 ```sh
 go run ./examples/n8n_studio            # http://localhost:8080
 go run ./examples/n8n_studio -addr localhost:9000
+go run ./examples/n8n_studio -templates-dir ./my-workflows   # also offer a folder of n8n exports in the Market
 ```
 
 - **Market:** browse and search the public n8n gallery (paid templates are left out). Picking a

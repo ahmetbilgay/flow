@@ -151,6 +151,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
         <button data-t="gallery">Gallery</button>
       </div>
       <div data-p="market" class="stack">
+        <select id="msrc" hidden><option value="">n8n gallery</option><option value="local">Local folder</option></select>
         <input id="mq" placeholder="Search templates (e.g. telegram)">
         <select id="mcat"><option value="">All categories</option></select>
         <div id="market" class="stack"><span class="muted small">Loading…</span></div>
@@ -264,7 +265,7 @@ const state = {
   chatSession: Math.random().toString(36).slice(2),
   template: null,    // market template shown (setup fields, accounts)
   setup: {},         // setup field values typed by the user
-  market: { page: 1, q: '', category: '', total: 0 },
+  market: { page: 1, q: '', category: '', source: '', total: 0 },
 };
 
 async function api(path, opts = {}) {
@@ -352,7 +353,12 @@ async function loadMarket() {
   const m = state.market, el = $('#market');
   el.innerHTML = '<span class="muted small">Loading…</span>';
   let p;
-  try { p = await api(`/api/market?page=${m.page}&q=${encodeURIComponent(m.q)}&category=${encodeURIComponent(m.category)}`); }
+  try {
+    const r = await api(`/api/market?source=${m.source}&page=${m.page}&q=${encodeURIComponent(m.q)}&category=${encodeURIComponent(m.category)}`);
+    p = r.page;
+    const src = $('#msrc');
+    if (r.local_count > 0) { src.hidden = false; src.options[1].text = `Local folder (${r.local_count})`; }
+  }
   catch (e) { el.innerHTML = `<span class="err small">${esc(e.message)}</span>`; return; }
   m.total = p.total;
   const sel = $('#mcat');
@@ -368,11 +374,13 @@ async function loadMarket() {
   p.templates.forEach(t => {
     const b = document.createElement('button');
     b.className = 'mcard' + (state.template && state.template.source_id === t.id ? ' on' : '');
-    b.innerHTML = `<span class="nm">${esc(t.name)}</span><span class="svc">${t.services.slice(0, 5).map(x => `<span>${esc(x)}</span>`).join('')}${t.services.length > 5 ? `<span>+${t.services.length - 5}</span>` : ''}</span><span class="small muted">${t.total_views.toLocaleString()} views${t.author ? ' · ' + esc(t.author.name || t.author.username) : ''}</span>`;
+    const foot = m.source === 'local' ? (t.description ? `<span class="small err">${esc(t.description)}</span>` : '<span class="small muted">local file</span>')
+      : `<span class="small muted">${t.total_views.toLocaleString()} views${t.author ? ' · ' + esc(t.author.name || t.author.username) : ''}</span>`;
+    b.innerHTML = `<span class="nm">${esc(t.name)}</span><span class="svc">${t.services.slice(0, 5).map(x => `<span>${esc(x)}</span>`).join('')}${t.services.length > 5 ? `<span>+${t.services.length - 5}</span>` : ''}</span>${foot}`;
     b.onclick = async () => {
       $$('#market .mcard').forEach(x => x.classList.remove('on')); b.classList.add('on');
       toast('Checking “' + t.name + '”…');
-      try { const tpl = await api('/api/market/' + t.id); await check(tpl.workflow, tpl); }
+      try { const tpl = await api((m.source === 'local' ? '/api/market/local/' : '/api/market/') + t.id); await check(tpl.workflow, tpl); }
       catch (e) { toast(e.message, true); }
     };
     el.append(b);
@@ -381,6 +389,11 @@ async function loadMarket() {
 let mqTimer;
 $('#mq').oninput = e => { clearTimeout(mqTimer); mqTimer = setTimeout(() => { state.market.q = e.target.value.trim(); state.market.page = 1; loadMarket(); }, 350); };
 $('#mcat').onchange = e => { state.market.category = e.target.value; state.market.page = 1; loadMarket(); };
+$('#msrc').onchange = e => {
+  Object.assign(state.market, { source: e.target.value, category: '', page: 1 });
+  const sel = $('#mcat'); while (sel.options.length > 1) sel.remove(1);
+  loadMarket();
+};
 $('#mprev').onclick = () => { state.market.page--; loadMarket(); };
 $('#mnext').onclick = () => { state.market.page++; loadMarket(); };
 
@@ -610,7 +623,8 @@ async function renderReport() {
   let html = '';
   const tpl = state.template;
   if (tpl) {
-    html += `<div class="issue info" style="margin-bottom:16px;flex-direction:column;gap:2px"><span><b>From the n8n gallery:</b> <a href="${esc(tpl.source_url)}" target="_blank" rel="noopener">#${esc(tpl.source_id)}</a>${tpl.author ? ' by ' + esc(tpl.author.name || tpl.author.username) : ''} · ${tpl.total_views.toLocaleString()} views${tpl.categories.length ? ' · ' + tpl.categories.map(esc).join(', ') : ''}</span></div>`;
+    if (tpl.source === 'local') html += `<div class="issue info" style="margin-bottom:16px"><span><b>From a local folder:</b> ${esc(tpl.source_url)}</span></div>`;
+    else html += `<div class="issue info" style="margin-bottom:16px;flex-direction:column;gap:2px"><span><b>From the n8n gallery:</b> <a href="${esc(tpl.source_url)}" target="_blank" rel="noopener">#${esc(tpl.source_id)}</a>${tpl.author ? ' by ' + esc(tpl.author.name || tpl.author.username) : ''} · ${tpl.total_views.toLocaleString()} views${tpl.categories.length ? ' · ' + tpl.categories.map(esc).join(', ') : ''}</span></div>`;
     if (tpl.needs_account.length) {
       html += sect('Accounts to connect', `<div class="small muted" style="margin-bottom:6px">The template's author removed their credentials; connect your own account for each of these nodes.</div><table><tr><th>Node</th><th>Service</th></tr>${tpl.needs_account.map(n => `<tr><td>${esc(n.node)}</td><td><code>${esc(n.type.replace(/^@?[^.]*\./, ''))}</code></td></tr>`).join('')}</table>`);
     }

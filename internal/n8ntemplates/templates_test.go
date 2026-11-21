@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +176,44 @@ func TestListPage(t *testing.T) {
 	}
 	if len(p.Categories) != 1 || p.Categories[0].Name != "AI" || p.Categories[0].Count != 9 {
 		t.Fatalf("categories: %+v", p.Categories)
+	}
+}
+
+func TestLoadDir(t *testing.T) {
+	dir := t.TempDir()
+	wf := func(name string, extra ...map[string]interface{}) []byte {
+		nodes := []interface{}{node("Start", "n8n-nodes-base.manualTrigger", nil, nil), node("Chat", "n8n-nodes-base.telegram", map[string]interface{}{"chatId": "123"}, nil)}
+		for _, e := range extra {
+			nodes = append(nodes, e)
+		}
+		b, _ := json.Marshal(map[string]interface{}{"name": name, "nodes": nodes, "connections": map[string]interface{}{"Start": link("Chat")}})
+		return b
+	}
+	write := func(rel string, b []byte) {
+		p := dir + "/" + rel
+		_ = os.MkdirAll(p[:strings.LastIndex(p, "/")], 0o755)
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Telegram_Bots/hello.json", wf("Hello bot"))
+	write("Telegram_Bots/z-copy.txt", wf("Hello bot copy"))                                                          // same nodes: kept once
+	write("Other/bom.txt", append([]byte("\xef\xbb\xbf"), wf("", node("X", "n8n-nodes-acme.unknown", nil, nil))...)) // BOM, no name
+	write("Other/notes.txt", []byte("just notes"))
+	write(".github/ci.json", wf("hidden", node("Y", "n8n-nodes-base.noOp", nil, nil)))
+	got, err := LoadDir(dir, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("templates: %d %+v", len(got), got)
+	}
+	bom, hello := got[0], got[1]
+	if hello.Name != "Hello bot" || hello.Source != "local" || hello.SourceURL != "Telegram_Bots/hello.json" || strings.Join(hello.Categories, ",") != "Telegram Bots" ||
+		!hello.Runnable || len(hello.SetupFields) != 1 || hello.SetupFields[0].Reason != "account-specific" {
+		t.Fatalf("hello: %+v", hello)
+	}
+	if bom.Name != "bom" || bom.Runnable || len(bom.Blocking) == 0 {
+		t.Fatalf("bom: %+v", bom)
 	}
 }
