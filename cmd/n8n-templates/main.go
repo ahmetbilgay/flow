@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dgmos/flow/internal/n8ntemplates"
+	"github.com/dgmos/flow/n8ntemplates"
 )
 
 func main() {

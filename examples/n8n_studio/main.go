@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"github.com/dgmos/flow"
-	"github.com/dgmos/flow/internal/n8ntemplates"
+	"github.com/dgmos/flow/n8ntemplates"
 )
 
 //go:embed index.html samples/*.json
