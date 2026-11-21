@@ -362,6 +362,11 @@ func numOutputs(typ string, ec *execCtx) int {
 	switch short(typ) {
 	case "if", "filter":
 		return 2
+	case "guardrails":
+		if op, _ := ec.str(0, "operation", "classify"); op == "classify" {
+			return 2
+		}
+		return 1
 	case "switch":
 		if rules, ok := ec.raw("rules.values"); ok {
 			if arr, ok := rules.([]interface{}); ok {

@@ -277,6 +277,7 @@ func extraNodeTypes(opts *Options) map[string]nodeFunc {
 		lc + "informationExtractor":                           informationExtractorNode,
 		lc + "googleGemini":                                   googleGeminiNode,
 		lc + "anthropic":                                      anthropicNode,
+		lc + "guardrails":                                     guardrailsNode,
 	}
 }
 
