@@ -536,7 +536,7 @@ func parseJSURL(s string) (*jsURL, error) {
 		u, err = url.Parse(badEscapeRe.ReplaceAllStringFunc(s, func(m string) string { return "%25" + m[1:] }))
 	}
 	if err != nil || u.Scheme == "" {
-		return nil, errors.New("Invalid URL")
+		return nil, errors.New("invalid URL")
 	}
 	p := &jsURL{protocol: u.Scheme + ":"}
 	if u.Opaque == "" {
@@ -597,13 +597,13 @@ func validateURLSecurity(s string, cfg urlsConfig) (*jsURL, string) {
 func ipv4ToInt(ip string) (uint32, error) {
 	parts := strings.Split(ip, ".")
 	if len(parts) != 4 {
-		return 0, fmt.Errorf("Invalid IP address: %s", ip)
+		return 0, fmt.Errorf("invalid IP address: %s", ip)
 	}
 	var n uint32
 	for _, s := range parts {
 		v, err := strconv.Atoi(s)
 		if err != nil || v < 0 || v > 255 {
-			return 0, fmt.Errorf("Invalid IP address: %s", ip)
+			return 0, fmt.Errorf("invalid IP address: %s", ip)
 		}
 		n = n<<8 | uint32(v)
 	}
@@ -634,7 +634,7 @@ func isURLAllowed(p *jsURL, allow []string, subdomains bool) (bool, error) {
 		if strings.Contains(entry, "://") {
 			a, err := parseJSURL(entry)
 			if err != nil {
-				return false, fmt.Errorf("Invalid URL in allow list: %q - %v", entry, err)
+				return false, fmt.Errorf("invalid URL in allow list: %q - %v", entry, err)
 			}
 			if host == a.hostname && (a.pathname == "" || a.pathname == "/" || strings.HasPrefix(p.pathname, a.pathname)) {
 				return true, nil
