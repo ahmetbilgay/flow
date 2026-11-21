@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/dgmos/flow/internal/node"
@@ -19,6 +21,9 @@ import (
 func sshNode(ec *execCtx) ([][]Item, error) {
 	return eachItem(ec, func(i int, it Item) ([]Item, error) {
 		r, o := ec.resourceOpBy(i, "command", map[string]string{"command": "execute", "file": "upload"})
+		if r == "file" && (o == "upload" || o == "download") {
+			return sshFile(ec, i, it, o)
+		}
 		if r != "command" || o != "execute" {
 			return nil, unsupportedOp(ec.node.Name, r, o)
 		}
@@ -125,3 +130,64 @@ func (ec *execCtx) sshDial(c map[string]interface{}, withKey bool) (*ssh.Client,
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// sshFile uploads an item's binary file to a remote directory, or downloads
+// a remote file into the item, over SFTP on the node's SSH connection.
+func sshFile(ec *execCtx, i int, it Item, op string) ([]Item, error) {
+	client, err := ec.sshClient(i)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+	fs, err := sftp.NewClient(client)
+	if err != nil {
+		return nil, fmt.Errorf("SSH: sftp: %w", err)
+	}
+	defer func() { _ = fs.Close() }()
+	prop, _ := ec.str(i, "binaryPropertyName", "data")
+	p, _ := ec.str(i, "path", "")
+	if op == "download" {
+		f, err := fs.Open(p)
+		if err != nil {
+			return nil, fmt.Errorf("SSH: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		data, err := node.ReadLimited(f, ec.opts.Outbound.MaxResponseBytesOrDefault())
+		if err != nil {
+			return nil, err
+		}
+		name := path.Base(p)
+		if n := toString(fieldsOf(ec, i, "options")["fileName"]); n != "" {
+			name = n
+		}
+		out := Item{JSON: it.JSON, Binary: map[string]interface{}{}}
+		for k, v := range it.Binary {
+			out.Binary[k] = v
+		}
+		out.Binary[prop] = binaryData(data, firstNonEmpty(mimeByExt(name), sniffMime(data)), name)
+		return []Item{out}, nil
+	}
+	data, _, name, err := binaryOf(it, prop)
+	if err != nil {
+		return nil, err
+	}
+	if n := toString(fieldsOf(ec, i, "options")["fileName"]); n != "" {
+		name = n
+	}
+	if name == "" {
+		return nil, permanentError{"SSH: the binary data has no file name; set Options > File Name"}
+	}
+	target := path.Join(p, name)
+	f, err := fs.Create(target)
+	if err != nil {
+		return nil, fmt.Errorf("SSH: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("SSH: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("SSH: %w", err)
+	}
+	return []Item{{JSON: map[string]interface{}{"success": true}}}, nil
+}

@@ -83,3 +83,28 @@ func TestSSHNode(t *testing.T) {
 		t.Fatalf("ssh: %v", got)
 	}
 }
+
+func TestSSHFileUploadDownload(t *testing.T) {
+	host, port := sftpServer(t)
+	creds := NewStaticCredentials()
+	creds.Set("sshPassword", "*", map[string]interface{}{"host": host, "port": float64(port), "username": "u", "password": "pw"})
+	h := newHarness(t, &Options{Credentials: creds, Outbound: node.OutboundPolicy{AllowedHosts: []string{"127.0.0.1"}}})
+	data := wfJSON(t, []map[string]interface{}{
+		nd("Start", "manualTrigger", 1, nil),
+		nd("File", "code", 2, map[string]interface{}{"jsCode": "return [{json: {}, binary: {data: await this.helpers.prepareBinaryData(Buffer.from('report body'), 'report.txt')}}];"}),
+		credNode(nd("Up", "ssh", 1, map[string]interface{}{"resource": "file", "operation": "upload", "path": "/"}), "sshPassword"),
+		credNode(nd("Down", "ssh", 1, map[string]interface{}{"resource": "file", "operation": "download", "path": "/report.txt", "binaryPropertyName": "doc"}), "sshPassword"),
+	}, "Start->File", "File->Up", "Up->Down")
+	if _, rep, _ := Import(data, ImportOptions{}); !rep.Runnable {
+		t.Fatalf("not runnable: %+v", rep.Blocking)
+	}
+	_, steps := h.run(t, data, "")
+	if up := itemsOf(t, steps["Up"], 0); len(up) != 1 || up[0]["success"] != true {
+		t.Fatalf("upload: %v", up)
+	}
+	got := OutputItems(steps["Down"].Output)
+	b := asMap(got[0].Binary["doc"])
+	if toString(b["data"]) != "cmVwb3J0IGJvZHk=" || b["fileName"] != "report.txt" {
+		t.Fatalf("download: %+v", got)
+	}
+}

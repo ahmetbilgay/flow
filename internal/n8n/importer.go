@@ -1165,7 +1165,7 @@ var resourceOps = map[string]struct {
 	"anthropic": {"text", map[string]string{"text": "message", "image": "analyze", "document": "analyze", "file": "upload"}, map[string]string{
 		"text": "message", "image": "analyze", "document": "analyze", "file": "upload get list delete deleteFile"}},
 	"perplexity":   {"chat", map[string]string{"chat": "complete"}, map[string]string{"chat": "complete"}},
-	"ssh":          {"command", map[string]string{"command": "execute", "file": "upload"}, map[string]string{"command": "execute"}},
+	"ssh":          {"command", map[string]string{"command": "execute", "file": "upload"}, map[string]string{"command": "execute", "file": "upload download"}},
 	"microsoftSql": {"", map[string]string{"": "insert"}, map[string]string{"": "executeQuery"}},
 	"apify": {"Actors", map[string]string{"Actors": "Run actor", "Actor tasks": "Run task", "Actor runs": "Get user runs list", "Datasets": "Get items", "Key-Value Stores": "Get Key-Value Store Record",
 		"actor": "run", "dataset": "getItems"}, map[string]string{
