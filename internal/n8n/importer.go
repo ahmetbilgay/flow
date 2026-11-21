@@ -250,6 +250,11 @@ func Import(data []byte, opts ImportOptions) (*models.Workflow, *Report, error) 
 						continue
 					}
 					if connType != "main" {
+						if _, root := extraNodeTypes(&Options{})[src.Type]; (root || nodeTypes()[src.Type] != nil) && !aiSubNodeSupported(src.Type) && !vectorStoreTypes[short(src.Type)] {
+							// e.g. Agent -> Chat Model: the connection is drawn the wrong way.
+							rep.block(src, "%s connection to %q starts at %s, which is not a sub-node", connType, dst.Name, src.Type)
+							continue
+						}
 						if aiLinks[dst.Name] == nil {
 							aiLinks[dst.Name] = map[string][]string{}
 						}
