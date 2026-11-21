@@ -510,7 +510,7 @@ var (
 	requireRe = regexp.MustCompile(`\brequire\s*\(\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`]*)`" + `)?`)
 	helpersRe = regexp.MustCompile(`\bhelpers\s*\.\s*([A-Za-z_$][\w$]*)`)
 	// Code node modules and this.helpers methods we provide.
-	codeModules = map[string]bool{"crypto": true, "node:crypto": true, "util": true, "node:util": true, "youtube-transcript": true}
+	codeModules = map[string]bool{"crypto": true, "node:crypto": true, "util": true, "node:util": true, "youtube-transcript": true, "cheerio": true}
 	codeHelpers = map[string]bool{"httpRequest": true, "request": true, "prepareBinaryData": true, "getBinaryDataBuffer": true, "binaryToBuffer": true, "returnJsonArray": true}
 )
 
@@ -523,7 +523,7 @@ func codeFeatureIssues(code, nodeType string) []string {
 		if name == "" {
 			out = append(out, "require() with a computed module name is not available")
 		} else if !codeModules[name] && (nodeType != "@n8n/n8n-nodes-langchain.code" || !langchainModules[name]) {
-			out = append(out, fmt.Sprintf("require('%s') is not available (crypto and util are)", name))
+			out = append(out, fmt.Sprintf("require('%s') is not available (crypto, util and cheerio are)", name))
 		}
 	}
 	for _, m := range helpersRe.FindAllStringSubmatch(code, -1) {

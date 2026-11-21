@@ -7,6 +7,7 @@ require github.com/jmoiron/sqlx v1.4.0
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/PuerkitoBio/goquery v1.10.3
+	github.com/andybalholm/cascadia v1.3.3
 	github.com/dlclark/regexp2 v1.11.5
 	github.com/dop251/goja v0.0.0-20260603125802-cfe4039cb6d7
 	github.com/emersion/go-imap v1.2.1
@@ -26,11 +27,11 @@ require (
 	github.com/yuin/goldmark v1.7.13
 	go.mongodb.org/mongo-driver/v2 v2.8.2
 	golang.org/x/crypto v0.41.0
+	golang.org/x/net v0.43.0
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
@@ -60,7 +61,6 @@ require (
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect

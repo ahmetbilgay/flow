@@ -76,13 +76,13 @@ Sonuçları `flow.N8NOutputItems(execution.Output)` ile okuyun.
 
 Tam liste için [İngilizce dokümana](../n8n.md) bakın.
 
-**Desteklenmeyenler:** `crypto`/`util` dışındaki `require()` modülleri, eski binary .xls dosyaları, yerleşik olmayan community node'lar. Galerinin tamamını indirip ölçmek için: `scripts/fetch-n8n-templates.sh /tmp/n8n-templates` ve ardından `N8N_CORPUS_DIR=/tmp/n8n-templates go test -tags n8ncorpus -run Corpus -v ./internal/n8n`.
+**Desteklenmeyenler:** `crypto`/`util`/`cheerio` dışındaki `require()` modülleri, eski binary .xls dosyaları, yerleşik olmayan community node'lar. Galerinin tamamını indirip ölçmek için: `scripts/fetch-n8n-templates.sh /tmp/n8n-templates` ve ardından `N8N_CORPUS_DIR=/tmp/n8n-templates go test -tags n8ncorpus -run Corpus -v ./internal/n8n`.
 
 ## Güvenlik
 
 İçe aktarılan workflow'lar güvenilmez kod olarak ele alınır:
 - **Ağ:** Tüm dış bağlantılar `Outbound` politikasından geçer. Varsayılan olarak yalnızca public adreslere izin verilir (SSRF koruması).
-- **JavaScript:** Kod, dosya erişimi olmayan, zaman sınırlı bir sandbox'ta çalışır. `require` yalnızca `crypto` ve `util` sağlar; Code içinden HTTP (`this.helpers.httpRequest`) `Outbound` politikasından geçer.
+- **JavaScript:** Kod, dosya erişimi olmayan, zaman sınırlı bir sandbox'ta çalışır. `require` yalnızca `crypto`, `util` ve `cheerio` sağlar (`cheerio`: `load`, CSS seçiciler, gezinme, `text`/`html`/`attr`/`data`/`val`, class/stil ve DOM düzenleme, `serialize`, `extract`; XML, HTML olarak ayrıştırılır); Code içinden HTTP (`this.helpers.httpRequest`) `Outbound` politikasından geçer.
 - **Yerel süreçler (varsayılan kapalı):** Execute Command, Python Code (`python3` ile; içe aktarılan paketler worker'a kurulmalı) ve STDIO MCP sunucuları yalnızca `AllowLocalProcesses` açıkken çalışır. Bunu sadece güvenilir workflow'lar ve izole worker'lar için açın. Local File Trigger yalnızca `FileSystemRoot` içini izler.
 - **Ortam değişkenleri ve dosyalar:** `$env` ve dosya erişimi varsayılan olarak kapalıdır.
 - **Resume bağlantıları:** HMAC ile imzalanır ve bekleyen node'a bağlıdır. Onay bağlantıları cevabı da imzalar; onay, e-posta tarayıcılarının bağlantıyı açmasıyla verilemesin diye bir onay sayfasındaki POST ile kaydedilir.

@@ -22,6 +22,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/jmespath/go-jmespath"
+	"golang.org/x/net/html"
 
 	"github.com/dgmos/flow/internal/models"
 )
@@ -153,6 +154,12 @@ type Runtime struct {
 	fromAI map[string]interface{}
 	// ec is the node context that created the runtime (nil in tests).
 	ec *execCtx
+	// chNodes are the HTML nodes handed to the cheerio shim, by handle;
+	// chIndex maps them back.
+	chNodes []*html.Node
+	chIndex map[*html.Node]int
+	// chModule is the require('cheerio') module once loaded.
+	chModule goja.Value
 }
 
 // newRuntime prepares a JS runtime bound to a node execution. items is the
@@ -390,6 +397,9 @@ func (r *Runtime) installHost() error {
 			}
 			return mustJSON(prev)
 		},
+	}
+	for k, v := range r.cheerioHost() {
+		host[k] = v
 	}
 	for k, v := range host {
 		if err := set(k, v); err != nil {
