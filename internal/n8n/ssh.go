@@ -74,12 +74,19 @@ func (ec *execCtx) sshClient(i int) (*ssh.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ec.sshDial(c, credType == "sshPrivateKey")
+}
+
+// sshDial connects with an SSH credential: a private key (with an optional
+// passphrase) when withKey, otherwise a password.
+func (ec *execCtx) sshDial(c map[string]interface{}, withKey bool) (*ssh.Client, error) {
+	var err error
 	cfg := &ssh.ClientConfig{
 		User:            credString(c, "username"),
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // n8n does not verify SSH host keys either
 		Timeout:         15 * time.Second,
 	}
-	if credType == "sshPrivateKey" {
+	if withKey {
 		key := []byte(strings.ReplaceAll(credString(c, "privateKey"), `\n`, "\n"))
 		var signer ssh.Signer
 		if p := credString(c, "passphrase"); p != "" {
