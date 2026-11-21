@@ -2,6 +2,8 @@ package flow
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -99,7 +101,17 @@ type N8NInstallOptions struct {
 	// SkipActivationEvents does not start n8n Triggers listening to
 	// "Workflow activated" / "Workflow updated".
 	SkipActivationEvents bool
+	// RenameConflictingWebhooks installs a workflow whose webhook path (or
+	// Telegram/WhatsApp-style webhookId) another workflow in the namespace
+	// already uses under a new route instead of failing with
+	// ErrN8NWebhookConflict: "-<suffix>" is appended, the suffix derived
+	// from the workflow ID so a reinstall keeps the same route. The result
+	// lists the changes in RenamedWebhooks.
+	RenameConflictingWebhooks bool
 }
+
+// N8NWebhookRename is a webhook route RenameConflictingWebhooks changed.
+type N8NWebhookRename = n8n.WebhookRename
 
 // N8NInstallResult is returned by InstallN8NWorkflow.
 type N8NInstallResult struct {
@@ -109,6 +121,8 @@ type N8NInstallResult struct {
 	// Webhooks lists the service triggers' webhook URLs and whether they
 	// were registered (Manual: enter the URL in the service yourself).
 	Webhooks []N8NWebhookRegistration
+	// RenamedWebhooks lists the routes RenameConflictingWebhooks changed.
+	RenamedWebhooks []N8NWebhookRename
 	// ActivationExecutions are the executions started for n8n Triggers
 	// listening to "Workflow activated" (first install) or "Workflow
 	// updated" (reinstall of an existing workflow ID).
@@ -177,6 +191,23 @@ func (e *Engine) InstallN8NWorkflow(ctx context.Context, namespace string, data 
 	res := &N8NInstallResult{Workflow: wf, Report: rep}
 	if !rep.Runnable && !opts.AllowPartial {
 		return res, fmt.Errorf("%w: %s", ErrN8NNotRunnable, rep.Blocking[0].Message)
+	}
+	if opts.RenameConflictingWebhooks {
+		used, err := e.webhookRoutesInUse(ctx, namespace, wf.ID)
+		if err != nil {
+			return res, err
+		}
+		sum := sha1.Sum([]byte(wf.ID))
+		renamed, changes, err := n8n.RenameWebhooks(data, func(k string) bool { _, ok := used[k]; return ok }, hex.EncodeToString(sum[:3]))
+		if err != nil {
+			return res, err
+		}
+		if len(changes) > 0 {
+			if wf, rep, err = n8n.Import(renamed, opts.N8NImportOptions); err != nil {
+				return res, err
+			}
+			res.Workflow, res.Report, res.RenamedWebhooks = wf, rep, changes
+		}
 	}
 	if err := e.checkWebhookConflicts(ctx, namespace, wf); err != nil {
 		return res, err
@@ -251,23 +282,33 @@ func N8NNodeSupported(nodeType string) bool { return n8n.Supported(nodeType) }
 // webhook path the imported workflow wants.
 var ErrN8NWebhookConflict = errors.New("webhook path is already used by another workflow")
 
-func (e *Engine) checkWebhookConflicts(ctx context.Context, namespace string, wf *Workflow) error {
-	mine := n8n.WebhookKeys(wf)
-	if len(mine) == 0 {
-		return nil
-	}
+// webhookRoutesInUse maps the webhook routes of a namespace's workflows,
+// other than skipID, to the workflow using them.
+func (e *Engine) webhookRoutesInUse(ctx context.Context, namespace, skipID string) (map[string]string, error) {
 	existing, err := e.WorkflowDefinitions(ctx, namespace)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	used := map[string]string{}
 	for _, other := range existing {
-		if other.ID == wf.ID {
+		if other.ID == skipID {
 			continue
 		}
 		for _, k := range n8n.WebhookKeys(other) {
 			used[k] = other.ID
 		}
+	}
+	return used, nil
+}
+
+func (e *Engine) checkWebhookConflicts(ctx context.Context, namespace string, wf *Workflow) error {
+	mine := n8n.WebhookKeys(wf)
+	if len(mine) == 0 {
+		return nil
+	}
+	used, err := e.webhookRoutesInUse(ctx, namespace, wf.ID)
+	if err != nil {
+		return err
 	}
 	for _, k := range mine {
 		if owner, ok := used[k]; ok {

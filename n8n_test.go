@@ -419,3 +419,53 @@ func TestN8NTriggerActivationEvents(t *testing.T) {
 		t.Fatalf("SkipActivationEvents: %v %v", res.ActivationExecutions, err)
 	}
 }
+
+func TestN8NRenameConflictingWebhooks(t *testing.T) {
+	eng, srv, _ := startN8N(t)
+	ctx := context.Background()
+	hook := map[string]interface{}{"name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "webhookId": "lead-intake",
+		"parameters": map[string]interface{}{"path": "lead-intake", "httpMethod": "POST", "responseMode": "lastNode"}}
+	tg := map[string]interface{}{"name": "Telegram", "type": "n8n-nodes-base.telegramTrigger", "typeVersion": 1.1, "webhookId": "tg-1"}
+	tpl := func(tag string) []byte {
+		return n8nWorkflow([]map[string]interface{}{hook, tg, setNode("Reply", [3]string{"copy", "string", tag})}, map[string]interface{}{"Webhook": link("Reply"), "Telegram": link("Reply")})
+	}
+	install := func(id, tag string, rename bool) (*flow.N8NInstallResult, error) {
+		return eng.InstallN8NWorkflow(ctx, "default", tpl(tag), flow.N8NInstallOptions{N8NImportOptions: flow.N8NImportOptions{ID: id}, RenameConflictingWebhooks: rename})
+	}
+	if _, err := install("copy-a", "A", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := install("copy-b", "B", false); !errors.Is(err, flow.ErrN8NWebhookConflict) {
+		t.Fatalf("without the option the second install must conflict: %v", err)
+	}
+	b, err := install("copy-b", "B", true)
+	if err != nil || len(b.RenamedWebhooks) != 2 {
+		t.Fatalf("rename: %v %+v", err, b)
+	}
+	c, err := install("copy-c", "C", true)
+	if err != nil || len(c.RenamedWebhooks) != 2 {
+		t.Fatalf("third copy: %v %+v", err, c)
+	}
+	pathOf := func(r *flow.N8NInstallResult) string {
+		for _, x := range r.RenamedWebhooks {
+			if x.Node == "Webhook" {
+				return x.To
+			}
+		}
+		return ""
+	}
+	pb, pc := pathOf(b), pathOf(c)
+	if !strings.HasPrefix(pb, "lead-intake-") || !strings.HasPrefix(pc, "lead-intake-") || pb == pc {
+		t.Fatalf("paths: %q %q", pb, pc)
+	}
+	if again, err := install("copy-b", "B", true); err != nil || pathOf(again) != pb {
+		t.Fatalf("reinstall keeps the route: %v %q", err, pathOf(again))
+	}
+	for path, want := range map[string]string{"lead-intake": "A", pb: "B", pc: "C"} {
+		req, _ := http.NewRequest("POST", srv.URL+"/n8n/webhook/"+path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		if code, body := do(t, req); code != 200 || !strings.Contains(body, `"copy":"`+want+`"`) {
+			t.Fatalf("POST %s: %d %s (want copy %s)", path, code, body, want)
+		}
+	}
+}

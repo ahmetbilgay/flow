@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -776,4 +777,114 @@ func WebhookKeys(wf *models.Workflow) []string {
 // or a Wait node resumed by a form submission.
 func isFormPage(n *models.Node) bool {
 	return n.Type == "n8n-nodes-base.form" || n.Type == "n8n-nodes-base.wait" && toString(nodeParams(n)["resume"]) == "form"
+}
+
+// WebhookRename is a webhook route RenameWebhooks changed.
+type WebhookRename struct {
+	Node string `json:"node"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// RenameWebhooks rewrites an n8n workflow export so its webhook routes do
+// not collide: a Webhook node's path, or a Telegram/WhatsApp-style
+// trigger's webhookId, that taken reports as used gets "-<suffix>" (then
+// "-<suffix>-2", …) appended. It returns the rewritten export and what
+// changed; an export with no taken route comes back unchanged.
+func RenameWebhooks(data []byte, taken func(key string) bool, suffix string) ([]byte, []WebhookRename, error) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, nil, err
+	}
+	var renames []WebhookRename
+	claimed := map[string]bool{} // routes given out in this export
+	free := func(keys func(string) []string, base string) string {
+		for n := 0; n < 1000; n++ {
+			cand := base + "-" + suffix
+			if n > 0 {
+				cand += "-" + strconv.Itoa(n+1)
+			}
+			ok := true
+			for _, k := range keys(cand) {
+				if taken(k) || claimed[k] {
+					ok = false
+				}
+			}
+			if ok {
+				return cand
+			}
+		}
+		return base + "-" + suffix + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	for _, x := range asList(raw["nodes"]) {
+		n := asMap(x)
+		typ := toString(n["type"])
+		if toBool(n["disabled"]) {
+			continue
+		}
+		switch {
+		case typ == "n8n-nodes-base.webhook":
+			p := asMap(n["parameters"])
+			if p == nil {
+				p = map[string]interface{}{}
+				n["parameters"] = p
+			}
+			path := strings.Trim(toString(p["path"]), "/")
+			if path == "" {
+				path = toString(n["webhookId"])
+			}
+			methods := []string{strings.ToUpper(toString(p["httpMethod"]))}
+			if toBool(p["multipleMethods"]) {
+				methods = nil
+				for _, m := range asList(p["httpMethod"]) {
+					methods = append(methods, strings.ToUpper(toString(m)))
+				}
+			}
+			for i, m := range methods {
+				if m == "" {
+					methods[i] = "GET"
+				}
+			}
+			keys := func(path string) []string {
+				out := make([]string, len(methods))
+				for i, m := range methods {
+					out[i] = m + " " + path
+				}
+				return out
+			}
+			clash := false
+			for _, k := range keys(path) {
+				if taken(k) || claimed[k] {
+					clash = true
+				}
+			}
+			if clash && path != "" && !strings.HasPrefix(path, "=") {
+				to := free(keys, path)
+				p["path"] = to
+				renames = append(renames, WebhookRename{Node: toString(n["name"]), From: path, To: to})
+				path = to
+			}
+			for _, k := range keys(path) {
+				claimed[k] = true
+			}
+		case rawBodyTriggers[typ]:
+			id := toString(n["webhookId"])
+			if id == "" {
+				id = toString(n["id"])
+			}
+			keys := func(id string) []string { return []string{"POST " + id} }
+			if id != "" && (taken("POST "+id) || claimed["POST "+id]) {
+				to := free(keys, id)
+				n["webhookId"] = to
+				renames = append(renames, WebhookRename{Node: toString(n["name"]), From: id, To: to})
+				id = to
+			}
+			claimed["POST "+id] = true
+		}
+	}
+	if len(renames) == 0 {
+		return data, nil, nil
+	}
+	out, err := json.Marshal(raw)
+	return out, renames, err
 }

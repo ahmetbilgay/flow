@@ -34,7 +34,7 @@ go eng.CronManager.Start(ctx) // schedule & polling triggers
 go eng.StartWorkerWithOptions(ctx, "default", "worker-1", flow.WorkerOptions{Concurrency: 8})
 ```
 
-`InstallN8NWorkflow` imports, registers and activates the workflow: Schedule and polling triggers become durable schedules; webhook, chat and form triggers are served by `N8NHandler`. Use `ImportN8NWorkflow` to only inspect a workflow without registering it.
+`InstallN8NWorkflow` imports, registers and activates the workflow: Schedule and polling triggers become durable schedules; webhook, chat and form triggers are served by `N8NHandler`. Use `ImportN8NWorkflow` to only inspect a workflow without registering it. Installing a workflow whose webhook path another workflow in the namespace already uses fails with `ErrN8NWebhookConflict`; with `RenameConflictingWebhooks: true` it is installed under a new route instead (`-<suffix>` appended, stable across reinstalls), listed in `RenamedWebhooks` — useful when users install the same template more than once.
 
 ## Compatibility report
 
