@@ -7,7 +7,7 @@ require github.com/jmoiron/sqlx v1.4.0
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/PuerkitoBio/goquery v1.10.3
-	github.com/dlclark/regexp2 v1.11.4
+	github.com/dlclark/regexp2 v1.11.5
 	github.com/dop251/goja v0.0.0-20260603125802-cfe4039cb6d7
 	github.com/emersion/go-imap v1.2.1
 	github.com/go-sql-driver/mysql v1.9.3
