@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dgmos/flow/internal/engine"
+	"github.com/dgmos/flow/internal/models"
 )
 
 // passthrough returns the main input unchanged (NoOp, triggers, …).
@@ -1316,9 +1317,53 @@ func evaluationNode(ec *execCtx) ([][]Item, error) {
 	return out, nil
 }
 
-// n8nTriggerNode is the n8n Trigger. Activation events are not emitted by
-// the engine; started without input it emits n8n's manual-execution item,
-// and a host can pass {"event": "Workflow published"} itself.
+// n8n Trigger events and the event names n8n emits for them.
+const (
+	EventInstanceStarted   = "init"
+	EventWorkflowActivated = "activate"
+	EventWorkflowUpdated   = "update"
+)
+
+var activationEventNames = map[string]string{
+	EventInstanceStarted:   "Instance started",
+	EventWorkflowActivated: "Workflow activated",
+	EventWorkflowUpdated:   "Workflow updated",
+}
+
+func n8nTimestamp() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000Z") }
+
+// ActivationInputs returns one execution input per n8n Trigger in wf that
+// listens to event (EventInstanceStarted, EventWorkflowActivated or
+// EventWorkflowUpdated), carrying n8n's event item.
+func ActivationInputs(wf *models.Workflow, event string) []string {
+	name, ok := activationEventNames[event]
+	if !ok || wf == nil {
+		return nil
+	}
+	var out []string
+	for i := range wf.Nodes {
+		n := &wf.Nodes[i]
+		if n.Type != "n8n-nodes-base.n8nTrigger" {
+			continue
+		}
+		listens := false
+		for _, e := range asList(nodeParams(n)["events"]) {
+			if toString(e) == event {
+				listens = true
+			}
+		}
+		if !listens {
+			continue
+		}
+		item := map[string]interface{}{"event": name, "timestamp": n8nTimestamp(), "workflow_id": wf.ID}
+		out = append(out, mustJSON(map[string]interface{}{TriggerKey: n.Name, "items": []interface{}{item}}))
+	}
+	return out
+}
+
+// n8nTriggerNode is the n8n Trigger. Activation events arrive as trigger
+// items (ActivationInputs); started without input it emits n8n's
+// manual-execution item.
 func n8nTriggerNode(ec *execCtx) ([][]Item, error) {
 	items := ec.items()
 	if len(items) == 1 && len(items[0].JSON) == 0 {
@@ -1326,7 +1371,7 @@ func n8nTriggerNode(ec *execCtx) ([][]Item, error) {
 		if ec.data != nil && ec.data.wf != nil {
 			id = ec.data.wf.ID
 		}
-		return [][]Item{{{JSON: map[string]interface{}{"event": "Manual execution", "timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), "workflow_id": id}}}}, nil
+		return [][]Item{{{JSON: map[string]interface{}{"event": "Manual execution", "timestamp": n8nTimestamp(), "workflow_id": id}}}}, nil
 	}
 	return passthrough(ec)
 }

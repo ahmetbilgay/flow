@@ -369,3 +369,53 @@ func TestN8NHumanInTheLoop(t *testing.T) {
 		t.Fatalf("wait webhook: %s", e.Output)
 	}
 }
+
+func TestN8NTriggerActivationEvents(t *testing.T) {
+	eng, _, _ := startN8N(t)
+	ctx := context.Background()
+	trig := map[string]interface{}{"name": "On events", "type": "n8n-nodes-base.n8nTrigger", "typeVersion": 1,
+		"parameters": map[string]interface{}{"events": []interface{}{"activate", "update", "init"}}}
+	data := n8nWorkflow([]map[string]interface{}{trig, setNode("Event", [3]string{"ev", "string", "={{ $json.event }}"}, [3]string{"wf", "string", "={{ $json.workflow_id }}"})},
+		map[string]interface{}{"On events": link("Event")})
+	wait := func(id string) string {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			e, err := eng.GetExecution(ctx, "default", id)
+			if err == nil && e.Status == flow.StatusCompleted {
+				items := flow.N8NOutputItems(e.Output)
+				if len(items) != 1 || items[0].JSON["wf"] != "acts" {
+					t.Fatalf("output: %s", e.Output)
+				}
+				return items[0].JSON["ev"].(string)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("execution %s did not complete", id)
+		return ""
+	}
+
+	res := install(t, eng, "acts", data)
+	if len(res.ActivationExecutions) != 1 || wait(res.ActivationExecutions[0]) != "Workflow activated" {
+		t.Fatalf("activate: %v", res.ActivationExecutions)
+	}
+	res = install(t, eng, "acts", data)
+	if len(res.ActivationExecutions) != 1 || wait(res.ActivationExecutions[0]) != "Workflow updated" {
+		t.Fatalf("update: %v", res.ActivationExecutions)
+	}
+	ids, err := eng.EmitN8NInstanceStarted(ctx, "default")
+	if err != nil || len(ids) != 1 || wait(ids[0]) != "Instance started" {
+		t.Fatalf("init: %v %v", ids, err)
+	}
+
+	// Only listened events fire, and the option turns them off.
+	trig["parameters"] = map[string]interface{}{"events": []interface{}{"init"}}
+	quiet := n8nWorkflow([]map[string]interface{}{trig, setNode("Event", [3]string{"ev", "string", "x"})}, map[string]interface{}{"On events": link("Event")})
+	if res := install(t, eng, "quiet", quiet); len(res.ActivationExecutions) != 0 {
+		t.Fatalf("init-only trigger fired on activation: %v", res.ActivationExecutions)
+	}
+	res, err = eng.InstallN8NWorkflow(ctx, "default", data, flow.N8NInstallOptions{N8NImportOptions: flow.N8NImportOptions{ID: "acts2"}, SkipActivationEvents: true})
+	if err != nil || len(res.ActivationExecutions) != 0 {
+		t.Fatalf("SkipActivationEvents: %v %v", res.ActivationExecutions, err)
+	}
+}

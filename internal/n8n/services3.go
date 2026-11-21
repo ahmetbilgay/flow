@@ -587,8 +587,10 @@ func spreadsheetFileNode(ec *execCtx) ([][]Item, error) {
 	op, _ := ec.str(0, "operation", "fromFile")
 	format, _ := ec.str(0, "fileFormat", "csv")
 	if op == "toFile" {
-		if format != "csv" && format != "xlsx" {
-			return nil, permanentError{fmt.Sprintf("Spreadsheet File: writing %s is not supported (csv and xlsx are)", format)}
+		switch format {
+		case "csv", "xlsx", "xls", "ods", "rtf", "html":
+		default:
+			return nil, permanentError{fmt.Sprintf("Spreadsheet File: writing %s is not supported", format)}
 		}
 		ec.params["operation"] = format
 		return convertToFileNode(ec)

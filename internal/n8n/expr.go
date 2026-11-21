@@ -160,6 +160,8 @@ type Runtime struct {
 	chIndex map[*html.Node]int
 	// chModule is the require('cheerio') module once loaded.
 	chModule goja.Value
+	// modules holds modules.js once a Code node requires one of its modules.
+	modules goja.Value
 }
 
 // newRuntime prepares a JS runtime bound to a node execution. items is the
@@ -401,6 +403,9 @@ func (r *Runtime) installHost() error {
 	for k, v := range r.cheerioHost() {
 		host[k] = v
 	}
+	for k, v := range r.moduleHost() {
+		host[k] = v
+	}
 	for k, v := range host {
 		if err := set(k, v); err != nil {
 			return err
@@ -491,6 +496,9 @@ func (r *Runtime) evalExpr(code string) (interface{}, error) {
 	})
 }
 
+// errJSMemory reports a run stopped by Options.JSMemoryLimit.
+var errJSMemory = errors.New("javascript memory limit exceeded")
+
 // guard runs fn with an interrupt timer and context cancellation. If fn is
 // stuck in native code that ignores interrupts (e.g. a pathological
 // JSON.stringify), the run is abandoned after a grace period so the worker
@@ -519,20 +527,40 @@ func (r *Runtime) guard(timeout time.Duration, fn func() (interface{}, error)) (
 	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	interrupted := false
+	var opts *Options
+	if r.data != nil {
+		opts = r.data.opts
+	}
+	memHit, stopMem := watchJSMemory(opts.jsMemoryLimit())
+	defer stopMem()
+	interrupted, overMemory := false, false
 	for {
 		select {
 		case res := <-done:
 			r.vm.ClearInterrupt()
+			if overMemory {
+				return nil, errJSMemory
+			}
 			return res.v, res.err
 		case <-timer.C:
 			if interrupted {
 				r.broken = true
+				if overMemory {
+					return nil, errJSMemory
+				}
 				return nil, errors.New("execution timed out")
 			}
 			r.vm.Interrupt("execution timed out")
 			interrupted = true
 			timer.Reset(2 * time.Second) // grace period for native code
+		case <-memHit:
+			memHit = nil
+			overMemory = true
+			if !interrupted {
+				r.vm.Interrupt("memory limit exceeded")
+				interrupted = true
+				timer.Reset(2 * time.Second)
+			}
 		case <-ctx.Done():
 			if !interrupted {
 				r.vm.Interrupt("execution cancelled")

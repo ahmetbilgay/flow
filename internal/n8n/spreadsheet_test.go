@@ -70,7 +70,7 @@ func TestReadODS(t *testing.T) {
 	if rows, _ := readSheet(ods, "", false); len(rows) != 1 || rows[0][0] != "x" {
 		t.Fatalf("default sheet is the first: %v", rows)
 	}
-	if _, err := readSheet([]byte{0xD0, 0xCF, 0x11, 0xE0, 0, 0}, "", false); err == nil || !strings.Contains(err.Error(), "legacy .xls") {
-		t.Fatalf("legacy xls: %v", err)
+	if _, err := readSheet([]byte{0xD0, 0xCF, 0x11, 0xE0, 0, 0}, "", false); err == nil || !strings.Contains(err.Error(), "invalid xls file") {
+		t.Fatalf("truncated xls: %v", err)
 	}
 }

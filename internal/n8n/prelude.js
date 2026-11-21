@@ -492,8 +492,19 @@
   g.atob = function (s) { return __b64dec(String(s)); };
 
   // ---------------------------------------------------------------- Code node helpers & modules
+  function bytesB64(v) {
+    var u = v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength), s = '';
+    for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+    return __latin1b64(s);
+  }
+  function b64Bytes(b64) {
+    var s = __b64latin1(b64), u = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+    return u;
+  }
   function bufB64(v, enc) {
     if (v instanceof Buf) return v.__b64;
+    if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) return bytesB64(v);
     enc = (enc || 'utf8').toLowerCase();
     if (enc === 'base64') return __b64norm(String(v));
     if (enc === 'hex') return __hexb64(String(v));
@@ -548,7 +559,51 @@
     randomUUID: function () { return __uuid(); },
     randomBytes: function (n) { return new Buf(__randomB64(Number(n))); },
     randomInt: function (min, max) { if (max === undefined) { max = min; min = 0; } return min + Math.floor(__randomFloat() * (max - min)); },
-    timingSafeEqual: function (a, b) { return bufB64(a) === bufB64(b); }
+    timingSafeEqual: function (a, b) { return bufB64(a) === bufB64(b); },
+    getRandomValues: getRandomValues
+  };
+  // Web Crypto subset (globalThis.crypto in Node 18+ and n8n's sandbox).
+  function getRandomValues(arr) {
+    if (!ArrayBuffer.isView(arr)) throw new TypeError('getRandomValues: argument must be a typed array');
+    if (arr.byteLength > 65536) throw new Error('getRandomValues: quota exceeded (max 65536 bytes)');
+    var r = b64Bytes(__randomB64(arr.byteLength)), view = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+    view.set(r);
+    return arr;
+  }
+  function hashName(a) {
+    var n = String(a && a.name || a || '').toUpperCase().replace(/^SHA-?/, 'sha');
+    if (!/^sha(1|256|384|512)$/.test(n)) throw new Error('crypto.subtle: unsupported hash ' + (a && a.name || a));
+    return n;
+  }
+  function toAB(b64) { var u = b64Bytes(b64); return u.buffer; }
+  var subtle = {
+    digest: promised(function (alg, data) { return toAB(__digest(hashName(alg), '', JSON.stringify([bufB64(data)]), false)); }),
+    importKey: promised(function (format, keyData, alg, extractable, usages) {
+      if (format !== 'raw') throw new Error('crypto.subtle.importKey: only raw keys are supported');
+      var name = String(alg && alg.name || alg).toUpperCase();
+      if (name !== 'HMAC') throw new Error('crypto.subtle.importKey: only HMAC keys are supported');
+      return { type: 'secret', extractable: !!extractable, algorithm: { name: 'HMAC', hash: { name: String(alg.hash && alg.hash.name || alg.hash) } }, usages: usages || [], __b64: bufB64(keyData) };
+    }),
+    sign: promised(function (alg, key, data) {
+      if (!key || !key.__b64) throw new Error('crypto.subtle.sign: invalid key');
+      return toAB(__digest(hashName(key.algorithm.hash), key.__b64, JSON.stringify([bufB64(data)]), true));
+    }),
+    verify: promised(function (alg, key, sig, data) {
+      var want = __digest(hashName(key.algorithm.hash), key.__b64, JSON.stringify([bufB64(data)]), true);
+      return want === bufB64(sig);
+    })
+  };
+  var webcrypto = { getRandomValues: getRandomValues, randomUUID: function () { return __uuid(); }, subtle: subtle };
+  cryptoModule.webcrypto = webcrypto;
+  cryptoModule.subtle = subtle;
+  g.crypto = webcrypto;
+  g.TextEncoder = function () { this.encoding = 'utf-8'; };
+  g.TextEncoder.prototype.encode = function (s) { return b64Bytes(__b64enc(s === undefined ? '' : String(s))); };
+  g.TextDecoder = function (enc) { this.encoding = String(enc || 'utf-8').toLowerCase(); };
+  g.TextDecoder.prototype.decode = function (v) {
+    if (v === undefined) return '';
+    var b = bufB64(v);
+    return this.encoding === 'latin1' || this.encoding === 'iso-8859-1' ? __b64latin1(b) : __b64dec(b);
   };
   function inspect(v) { if (typeof v === 'string') return "'" + v + "'"; try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); } }
   var utilModule = {
@@ -574,13 +629,19 @@
     promisify: function (fn) { return function () { var args = Array.prototype.slice.call(arguments); return new Promise(function (res, rej) { args.push(function (e, v) { if (e) rej(e); else res(v); }); fn.apply(null, args); }); }; },
     types: { isDate: function (v) { return v instanceof Date; }, isRegExp: function (v) { return v instanceof RegExp; } }
   };
+  var nodeModuleNames = ['luxon', 'path', 'url', 'querystring', 'buffer', 'axios', 'node-fetch', 'zlib', 'jsonwebtoken'];
+  // Node's URL globals, from modules.js on first use.
+  ['URL', 'URLSearchParams'].forEach(function (k) {
+    Object.defineProperty(g, k, { configurable: true, get: function () { var v = __nodeModules().url[k]; Object.defineProperty(g, k, { value: v, configurable: true, writable: true }); return v; } });
+  });
   g.require = function (name) {
     name = String(name).replace(/^node:/, '');
     if (name === 'crypto') return cryptoModule;
     if (name === 'util') return utilModule;
     if (name === 'cheerio') return __chModule();
+    if (nodeModuleNames.indexOf(name) >= 0) return __nodeModules()[name];
     if (name === 'youtube-transcript') return { YoutubeTranscript: { fetchTranscript: promised(function (id, cfg) { return JSON.parse(__ytTranscript(String(id), (cfg && cfg.lang) || '')); }) } };
-    throw new Error("Cannot find module '" + name + "' (only 'crypto', 'util' and 'cheerio' are available)");
+    throw new Error("Cannot find module '" + name + "' (available: crypto, util, cheerio, " + nodeModuleNames.join(', ') + ")");
   };
 
   // ---------------------------------------------------------------- helpers

@@ -96,6 +96,9 @@ type N8NInstallOptions struct {
 	// Stripe, Typeform, Shopify, …) create their webhooks in the service,
 	// as n8n does on activation; see Webhooks in the result.
 	WebhookBaseURL string
+	// SkipActivationEvents does not start n8n Triggers listening to
+	// "Workflow activated" / "Workflow updated".
+	SkipActivationEvents bool
 }
 
 // N8NInstallResult is returned by InstallN8NWorkflow.
@@ -106,6 +109,31 @@ type N8NInstallResult struct {
 	// Webhooks lists the service triggers' webhook URLs and whether they
 	// were registered (Manual: enter the URL in the service yourself).
 	Webhooks []N8NWebhookRegistration
+	// ActivationExecutions are the executions started for n8n Triggers
+	// listening to "Workflow activated" (first install) or "Workflow
+	// updated" (reinstall of an existing workflow ID).
+	ActivationExecutions []string
+}
+
+// EmitN8NInstanceStarted starts the n8n Triggers of a namespace's workflows
+// that listen to "Instance started"; call it once when the application
+// starts. It returns the started execution IDs.
+func (e *Engine) EmitN8NInstanceStarted(ctx context.Context, namespace string) ([]string, error) {
+	wfs, err := e.WorkflowDefinitions(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, wf := range wfs {
+		for _, input := range n8n.ActivationInputs(wf, n8n.EventInstanceStarted) {
+			id, err := e.StartWorkflow(ctx, namespace, wf.ID, input)
+			if err != nil {
+				return ids, fmt.Errorf("workflow %s: %w", wf.ID, err)
+			}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // N8NWebhookRegistration is the webhook of one service trigger.
@@ -153,8 +181,22 @@ func (e *Engine) InstallN8NWorkflow(ctx context.Context, namespace string, data 
 	if err := e.checkWebhookConflicts(ctx, namespace, wf); err != nil {
 		return res, err
 	}
+	_, existsErr := e.WorkflowDefinition(ctx, namespace, wf.ID)
 	if err := e.RegisterWorkflow(ctx, namespace, wf); err != nil {
 		return res, err
+	}
+	if !opts.SkipActivationEvents {
+		event := n8n.EventWorkflowActivated
+		if existsErr == nil {
+			event = n8n.EventWorkflowUpdated
+		}
+		for _, input := range n8n.ActivationInputs(wf, event) {
+			id, err := e.StartWorkflow(ctx, namespace, wf.ID, input)
+			if err != nil {
+				return res, fmt.Errorf("n8n Trigger: %w", err)
+			}
+			res.ActivationExecutions = append(res.ActivationExecutions, id)
+		}
 	}
 	if opts.WebhookBaseURL != "" {
 		res.Webhooks = n8n.RegisterWebhooks(ctx, e.n8nOpts, namespace, wf, opts.WebhookBaseURL)

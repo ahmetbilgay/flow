@@ -507,23 +507,116 @@ var unsupportedExpr = []struct {
 }
 
 var (
-	requireRe = regexp.MustCompile(`\brequire\s*\(\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`]*)`" + `)?`)
-	helpersRe = regexp.MustCompile(`\bhelpers\s*\.\s*([A-Za-z_$][\w$]*)`)
+	requireArgRe = regexp.MustCompile(`\brequire\s*\(\s*$`)
+	requireRe    = regexp.MustCompile(`\brequire\s*\(\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`]*)`" + `)?`)
+	helpersRe    = regexp.MustCompile(`\bhelpers\s*\.\s*([A-Za-z_$][\w$]*)`)
 	// Code node modules and this.helpers methods we provide.
-	codeModules = map[string]bool{"crypto": true, "node:crypto": true, "util": true, "node:util": true, "youtube-transcript": true, "cheerio": true}
+	codeModules = func() map[string]bool {
+		m := map[string]bool{"crypto": true, "util": true, "youtube-transcript": true, "cheerio": true}
+		for _, n := range nodeModuleNames {
+			m[n] = true
+		}
+		for n := range m {
+			if n != "cheerio" && n != "youtube-transcript" && n != "luxon" && n != "axios" && n != "node-fetch" && n != "jsonwebtoken" {
+				m["node:"+n] = true
+			}
+		}
+		return m
+	}()
 	codeHelpers = map[string]bool{"httpRequest": true, "request": true, "prepareBinaryData": true, "getBinaryDataBuffer": true, "binaryToBuffer": true, "returnJsonArray": true}
 )
+
+// stripJSComments blanks comments and string contents (except require()
+// module names) so mentions of require() that are not calls are not
+// reported. A slash starts a regex after an operator or opening bracket.
+func stripJSComments(code string) string {
+	b := []byte(code)
+	out := make([]byte, 0, len(b))
+	prev := byte(0) // last significant character outside comments
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		switch {
+		case c == '/' && i+1 < len(b) && b[i+1] == '/':
+			for i < len(b) && b[i] != '\n' {
+				i++
+			}
+			if i < len(b) {
+				out = append(out, '\n')
+			}
+			continue
+		case c == '/' && i+1 < len(b) && b[i+1] == '*':
+			i += 2
+			for i+1 < len(b) && (b[i] != '*' || b[i+1] != '/') {
+				i++
+			}
+			i++
+			out = append(out, ' ')
+			continue
+		case c == '\'' || c == '"' || c == '`':
+			start := i
+			for i++; i < len(b) && b[i] != c; i++ {
+				if b[i] == '\\' {
+					i++
+				} else if c != '`' && b[i] == '\n' {
+					break
+				}
+			}
+			if i >= len(b) {
+				i = len(b) - 1
+			}
+			if requireArgRe.Match(out[max(0, len(out)-64):]) {
+				out = append(out, b[start:i+1]...) // a module name
+			} else {
+				// Other string contents are not code.
+				out = append(out, c)
+				for k := start + 1; k < i; k++ {
+					out = append(out, ' ')
+				}
+				if i > start {
+					out = append(out, b[i])
+				}
+			}
+			prev = c
+			continue
+		case c == '/' && (prev == 0 || strings.IndexByte("(,=:[!&|?{};+-*%<>~^", prev) >= 0):
+			start, inClass := i, false
+			for i++; i < len(b) && b[i] != '\n'; i++ {
+				if b[i] == '\\' {
+					i++
+				} else if b[i] == '[' {
+					inClass = true
+				} else if b[i] == ']' {
+					inClass = false
+				} else if b[i] == '/' && !inClass {
+					break
+				}
+			}
+			if i >= len(b) {
+				i = len(b) - 1
+			}
+			out = append(out, b[start:i+1]...)
+			prev = '/'
+			continue
+		}
+		out = append(out, c)
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			prev = c
+		}
+	}
+	return string(out)
+}
 
 // codeFeatureIssues reports require() modules and this.helpers methods a
 // Code node uses that are not available.
 func codeFeatureIssues(code, nodeType string) []string {
 	var out []string
+	code = stripJSComments(code)
 	for _, m := range requireRe.FindAllStringSubmatch(code, -1) {
 		name := m[1] + m[2] + m[3]
 		if name == "" {
 			out = append(out, "require() with a computed module name is not available")
 		} else if !codeModules[name] && (nodeType != "@n8n/n8n-nodes-langchain.code" || !langchainModules[name]) {
-			out = append(out, fmt.Sprintf("require('%s') is not available (crypto, util and cheerio are)", name))
+			out = append(out, fmt.Sprintf("require('%s') is not available (supported: crypto, util, cheerio, luxon, path, url, querystring, buffer, axios, node-fetch, zlib, jsonwebtoken)", name))
 		}
 	}
 	for _, m := range helpersRe.FindAllStringSubmatch(code, -1) {
@@ -622,7 +715,7 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 			rep.block(n, "Respond to Chat waiting for the user's reply is not supported")
 		}
 	case "n8nTrigger":
-		rep.warn(n, "the engine does not emit n8n's activation/update/instance-start events; start the workflow yourself (e.g. after installing it)")
+		rep.warn(n, "activation and update events are emitted by InstallN8NWorkflow; the instance-start event needs EmitN8NInstanceStarted at startup")
 	case "evaluationTrigger":
 		rep.warn(n, "evaluation runs (dataset rows, metrics) are not supported; started directly, the Evaluation Trigger passes its input on")
 	case "youTube":
@@ -667,18 +760,10 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 			rep.block(n, "MySQL operation %q is not supported", op)
 		}
 	case "spreadsheetFile":
-		if f := toString(get("fileFormat")); toString(get("operation")) == "toFile" && f != "" && f != "csv" && f != "xlsx" {
-			rep.block(n, "writing Spreadsheet File format %q is not supported (csv and xlsx are)", f)
-		}
-	case "extractFromFile":
-		if op := toString(get("operation")); op == "rtf" {
-			rep.block(n, "extracting %s files is not supported", op)
-		} else if op == "xls" {
-			rep.warn(n, "legacy binary .xls files are not supported; .xlsx and .ods files are read")
-		}
-	case "convertToFile":
-		if op := toString(get("operation")); op == "xls" || op == "ods" || op == "rtf" || op == "iCal" {
-			rep.block(n, "converting to %s is not supported", op)
+		switch f := toString(get("fileFormat")); {
+		case toString(get("operation")) != "toFile", f == "", f == "csv", f == "xlsx", f == "xls", f == "ods", f == "rtf", f == "html":
+		default:
+			rep.block(n, "writing Spreadsheet File format %q is not supported", f)
 		}
 	case "emailSend":
 		if op := toString(get("operation")); op == "sendAndWait" {

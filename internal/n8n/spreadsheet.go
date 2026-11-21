@@ -86,9 +86,9 @@ func readSheet(data []byte, sheet string, raw bool) ([][]string, error) {
 	case sheetODS:
 		return readODS(data, sheet)
 	case sheetXLS:
-		return nil, permanentError{"legacy .xls (Excel 97-2003) files are not supported; save the file as .xlsx"}
+		return readXLS(data, sheet, raw)
 	}
-	return nil, permanentError{"file is not an xlsx or ods spreadsheet"}
+	return nil, permanentError{"file is not an xlsx, xls or ods spreadsheet"}
 }
 
 // sheetItems turns rows into items like n8n's sheet_to_json: the first row
@@ -187,6 +187,15 @@ func writeXLSX(items []Item, sheet string, header bool) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func attrNS(se xml.StartElement, space, name string) string {
+	for _, a := range se.Attr {
+		if a.Name.Space == space && a.Name.Local == name {
+			return a.Value
+		}
+	}
+	return ""
+}
+
 // readODS reads a sheet of an OpenDocument spreadsheet as displayed text.
 func readODS(data []byte, sheet string) ([][]string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -264,7 +273,15 @@ func readODS(data []byte, sheet string) ([][]string, error) {
 				}
 				paras++
 			case t.Name.Space == textNS && t.Name.Local == "s":
-				cell.WriteByte(' ')
+				n, err := strconv.Atoi(attrNS(t, textNS, "c"))
+				if err != nil || n < 1 {
+					n = 1
+				}
+				cell.WriteString(strings.Repeat(" ", min(n, 1000)))
+			case t.Name.Space == textNS && t.Name.Local == "tab":
+				cell.WriteByte('\t')
+			case t.Name.Space == textNS && t.Name.Local == "line-break":
+				cell.WriteByte('\n')
 			}
 		case xml.CharData:
 			if inTable && paras > 0 {

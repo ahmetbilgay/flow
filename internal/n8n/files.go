@@ -23,10 +23,6 @@ import (
 
 func extractFromFileNode(ec *execCtx) ([][]Item, error) {
 	op, _ := ec.str(0, "operation", "csv")
-	switch op {
-	case "rtf":
-		return nil, permanentError{fmt.Sprintf("Extract from File: %s is not supported", op)}
-	}
 	var out []Item
 	for i, it := range ec.items() {
 		prop, _ := ec.str(i, "binaryPropertyName", "data")
@@ -92,7 +88,10 @@ func extractOne(ec *execCtx, i int, op string, data []byte, mt, dest string) ([]
 			}
 		}
 		return out, nil
-	case "spreadsheet": // Spreadsheet File v1 "fromFile": any sheet format or CSV
+	case "spreadsheet": // Spreadsheet File v1 "fromFile": any sheet format, RTF or CSV
+		if bytes.HasPrefix(bytes.TrimSpace(data), []byte(`{\rtf`)) {
+			return extractOne(ec, i, "rtf", data, mt, dest)
+		}
 		if sniffSheet(data) == sheetUnknown {
 			return extractOne(ec, i, "csv", data, mt, dest)
 		}
@@ -101,6 +100,14 @@ func extractOne(ec *execCtx, i int, op string, data []byte, mt, dest string) ([]
 		sheet, _ := ec.str(i, "options.sheetName", "")
 		raw, _ := ec.boolean(i, "options.rawData", false)
 		rows, err := readSheet(data, sheet, raw)
+		if err != nil {
+			return nil, err
+		}
+		header, _ := ec.boolean(i, "options.headerRow", true)
+		empty, _ := ec.boolean(i, "options.includeEmptyCells", false)
+		return sheetItems(rows, header, empty), nil
+	case "rtf":
+		rows, err := readRTFTable(data)
 		if err != nil {
 			return nil, err
 		}
@@ -276,6 +283,37 @@ func convertToFileNode(ec *execCtx) ([][]Item, error) {
 			return nil, err
 		}
 		return single(b, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "data.xlsx")
+	case "xls":
+		sheet, _ := ec.str(0, "options.sheetName", "Sheet")
+		header, _ := ec.boolean(0, "options.headerRow", true)
+		b, err := writeXLS(items, sheet, header)
+		if err != nil {
+			return nil, err
+		}
+		return single(b, "application/vnd.ms-excel", "data.xls")
+	case "ods":
+		sheet, _ := ec.str(0, "options.sheetName", "Sheet")
+		header, _ := ec.boolean(0, "options.headerRow", true)
+		b, err := writeODS(items, sheet, header)
+		if err != nil {
+			return nil, err
+		}
+		return single(b, "application/vnd.oasis.opendocument.spreadsheet", "data.ods")
+	case "rtf":
+		header, _ := ec.boolean(0, "options.headerRow", true)
+		return single(writeRTF(items, header), "application/rtf", "data.rtf")
+	case "iCal":
+		out := make([]Item, 0, len(items))
+		for i, it := range items {
+			b, err := icalEvent(ec, i)
+			if err != nil {
+				return nil, err
+			}
+			name, _ := ec.str(i, "options.fileName", "event.ics")
+			bp, _ := ec.str(i, "options.binaryPropertyName", "data")
+			out = append(out, Item{JSON: it.JSON, Binary: map[string]interface{}{bp: binaryData(b, "text/calendar", name)}, PairedItem: paired(i)})
+		}
+		return [][]Item{out}, nil
 	case "html":
 		cols := columnsOf(items)
 		var b strings.Builder

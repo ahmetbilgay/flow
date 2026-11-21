@@ -26,6 +26,11 @@ type Options struct {
 	ExpressionTimeout time.Duration
 	// CodeTimeout bounds each Code node run (default 60s).
 	CodeTimeout time.Duration
+	// JSMemoryLimit stops running JavaScript (expressions, Code nodes) when
+	// the process heap exceeds this many bytes. Zero uses 90% of the Go
+	// memory limit (GOMEMLIMIT) when one is set; negative disables it. goja
+	// cannot measure memory per run, so all runs over the limit stop.
+	JSMemoryLimit int64
 	// Credentials resolves n8n credential references. Nil means no
 	// credentials are available.
 	Credentials CredentialProvider
