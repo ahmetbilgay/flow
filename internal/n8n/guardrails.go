@@ -4,7 +4,7 @@
 // keyword matching and the jailbreak / NSFW / topical-alignment prompts — is
 // ported from openai-guardrails-js (https://github.com/openai/openai-guardrails-js,
 // src/checks/*.ts at commit b9b99b4), Copyright (c) 2025 OpenAI, released
-// under the MIT License. The node interface (parameters, stages, outputs and
+// under the MIT License (see THIRD_PARTY_NOTICES.md). The node interface (parameters, stages, outputs and
 // item shapes) follows n8n's Guardrails node.
 package n8n
 
