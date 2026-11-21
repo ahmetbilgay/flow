@@ -101,3 +101,18 @@ func TestEvaluationNodesOutsideEvaluation(t *testing.T) {
 		t.Fatal("evaluation branch ran")
 	}
 }
+
+func TestN8NTrigger(t *testing.T) {
+	data := wfJSON(t, []map[string]interface{}{
+		nd("On activate", "n8nTrigger", 1, map[string]interface{}{"events": []interface{}{"activate"}}),
+		nd("Next", "noOp", 1, nil),
+	}, "On activate->Next")
+	_, rep, _ := Import(data, ImportOptions{})
+	if !rep.Runnable || len(rep.Warnings) == 0 {
+		t.Fatalf("runnable=%v %+v %+v", rep.Runnable, rep.Blocking, rep.Warnings)
+	}
+	_, steps := newHarness(t, nil).run(t, data, "")
+	if got := itemsOf(t, steps["Next"], 0); len(got) != 1 || got[0]["event"] != "Manual execution" {
+		t.Fatalf("got %v", got)
+	}
+}

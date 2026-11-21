@@ -130,6 +130,7 @@ func nodeTypes() map[string]nodeFunc {
 		b + "ftp":                          ftpNode,
 		b + "microsoftSql":                 microsoftSQLNode,
 		b + "evaluationTrigger":            passthrough,
+		b + "n8nTrigger":                   n8nTriggerNode,
 		b + "evaluation":                   evaluationNode,
 		b + "mongoDb":                      mongoDbNode,
 		b + "rssFeedReadTrigger":           rssFeedReadTriggerNode,

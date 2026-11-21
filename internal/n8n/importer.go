@@ -80,6 +80,25 @@ func (r *Report) warn(n *rawNode, format string, a ...interface{}) {
 	r.Warnings = append(r.Warnings, is)
 }
 
+// noteText is a node's notes: a string, or an object with a "text" field
+// as some exported templates have.
+type noteText string
+
+func (t *noteText) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*t = noteText(s)
+		return nil
+	}
+	var o struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(b, &o) == nil {
+		*t = noteText(o.Text)
+	}
+	return nil
+}
+
 type rawNode struct {
 	ID               string                 `json:"id"`
 	Name             string                 `json:"name"`
@@ -89,7 +108,7 @@ type rawNode struct {
 	Parameters       map[string]interface{} `json:"parameters"`
 	Credentials      map[string]interface{} `json:"credentials"`
 	Disabled         bool                   `json:"disabled"`
-	Notes            string                 `json:"notes"`
+	Notes            noteText               `json:"notes"`
 	AlwaysOutputData bool                   `json:"alwaysOutputData"`
 	ExecuteOnce      bool                   `json:"executeOnce"`
 	RetryOnFail      bool                   `json:"retryOnFail"`
@@ -185,6 +204,7 @@ var triggerKinds = map[string]string{
 	"n8n-nodes-base.googleCalendarTrigger":       "poll",
 	"n8n-nodes-base.airtableTrigger":             "poll",
 	"n8n-nodes-base.evaluationTrigger":           "evaluation",
+	"n8n-nodes-base.n8nTrigger":                  "external",
 }
 
 var defaultTriggerRank = map[string]int{"manual": 0, "chat": 1, "webhook": 2, "form": 3, "schedule": 4, "poll": 5, "external": 6, "subworkflow": 7, "mcp": 8, "evaluation": 9}
@@ -456,7 +476,7 @@ func toFlowNode(n *rawNode, byName map[string]*rawNode, aiLinks map[string]map[s
 		fn.Meta["position"] = n.Position
 	}
 	if n.Notes != "" {
-		fn.Meta["notes"] = n.Notes
+		fn.Meta["notes"] = string(n.Notes)
 	}
 	if n.RetryOnFail {
 		tries := n.MaxTries
@@ -601,6 +621,8 @@ func checkNode(n *rawNode, typ string, params map[string]interface{}, rep *Repor
 		if toBool(get("waitUserReply")) {
 			rep.block(n, "Respond to Chat waiting for the user's reply is not supported")
 		}
+	case "n8nTrigger":
+		rep.warn(n, "the engine does not emit n8n's activation/update/instance-start events; start the workflow yourself (e.g. after installing it)")
 	case "evaluationTrigger":
 		rep.warn(n, "evaluation runs (dataset rows, metrics) are not supported; started directly, the Evaluation Trigger passes its input on")
 	case "youTube":

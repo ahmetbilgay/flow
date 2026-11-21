@@ -1315,3 +1315,18 @@ func evaluationNode(ec *execCtx) ([][]Item, error) {
 	}
 	return out, nil
 }
+
+// n8nTriggerNode is the n8n Trigger. Activation events are not emitted by
+// the engine; started without input it emits n8n's manual-execution item,
+// and a host can pass {"event": "Workflow published"} itself.
+func n8nTriggerNode(ec *execCtx) ([][]Item, error) {
+	items := ec.items()
+	if len(items) == 1 && len(items[0].JSON) == 0 {
+		id := ""
+		if ec.data != nil && ec.data.wf != nil {
+			id = ec.data.wf.ID
+		}
+		return [][]Item{{{JSON: map[string]interface{}{"event": "Manual execution", "timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), "workflow_id": id}}}}, nil
+	}
+	return passthrough(ec)
+}

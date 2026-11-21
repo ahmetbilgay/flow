@@ -126,3 +126,11 @@ func TestReversedAIConnectionIsBlocked(t *testing.T) {
 		t.Fatalf("err=%v runnable=%v blocking=%+v", err, rep.Runnable, rep.Blocking)
 	}
 }
+
+func TestNotesAsObject(t *testing.T) {
+	data := []byte(`{"nodes":[{"name":"Start","type":"n8n-nodes-base.manualTrigger","typeVersion":1,"parameters":{},"notes":{"text":"### Step 1"}}],"connections":{}}`)
+	wf, rep, err := Import(data, ImportOptions{})
+	if err != nil || !rep.Runnable || wf.Nodes[0].Meta["notes"] != "### Step 1" {
+		t.Fatalf("err=%v rep=%+v", err, rep)
+	}
+}
