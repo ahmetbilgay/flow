@@ -483,7 +483,7 @@ func (f *upForm) build() error {
 		f.set("bluesky_link_url", f.str("blueskyLink", ""))
 	}
 	for p, fields := range upExtras {
-		if !f.has(p) && !(manual && p != "threads" && p != "google_business") {
+		if !f.has(p) && (!manual || p == "threads" || p == "google_business") {
 			continue
 		}
 		for _, pf := range fields {

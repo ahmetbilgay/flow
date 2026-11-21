@@ -140,15 +140,6 @@ func cmtyMultipart(fields [][2]string, files ...cmtyFile) ([]byte, string) {
 	return buf.Bytes(), w.FormDataContentType()
 }
 
-// cmtyItemFile reads a binary property of input item i.
-func cmtyItemFile(ec *execCtx, i int, prop string) ([]byte, string, string, error) {
-	items := ec.items()
-	if i >= len(items) {
-		return nil, "", "", permanentError{fmt.Sprintf("%s: no input item %d", ec.node.Name, i)}
-	}
-	return binaryOf(items[i], prop)
-}
-
 // cmtySleep waits d unless the execution is cancelled.
 func cmtySleep(ec *execCtx, d time.Duration) error {
 	if d <= 0 {

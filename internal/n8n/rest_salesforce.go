@@ -437,7 +437,7 @@ var (
 // sfSOQL builds the getAll query as n8n does.
 func sfSOQL(opts map[string]interface{}, sobject string, all bool, limit int, version float64) (string, error) {
 	if !sfObjectRe.MatchString(sobject) {
-		return "", fmt.Errorf("Invalid SOQL object name: %s", sobject)
+		return "", fmt.Errorf("invalid SOQL object name: %s", sobject)
 	}
 	var fields []string
 	switch f := opts["fields"].(type) {
@@ -454,7 +454,7 @@ func sfSOQL(opts map[string]interface{}, sobject string, all bool, limit int, ve
 	}
 	for _, f := range fields {
 		if !sfFieldRe.MatchString(f) {
-			return "", fmt.Errorf("Invalid SOQL field name: %s", f)
+			return "", fmt.Errorf("invalid SOQL field name: %s", f)
 		}
 	}
 	if len(fields) == 0 {
@@ -465,12 +465,12 @@ func sfSOQL(opts map[string]interface{}, sobject string, all bool, limit int, ve
 		m := asMap(x)
 		field := toString(m["field"])
 		if !sfFieldRe.MatchString(field) {
-			return "", fmt.Errorf("Invalid SOQL field name: %s", field)
+			return "", fmt.Errorf("invalid SOQL field name: %s", field)
 		}
 		opName := toString(m["operation"])
 		op, ok := sfOps[strings.ToUpper(strings.Join(strings.Fields(opName), " "))]
 		if !ok {
-			return "", fmt.Errorf("Invalid SOQL operator: %s", opName)
+			return "", fmt.Errorf("invalid SOQL operator: %s", opName)
 		}
 		val, err := sfValue(m["value"], version)
 		if err != nil {
@@ -520,5 +520,5 @@ func sfValue(v interface{}, version float64) (string, error) {
 		}
 		return "'" + sfEscaper.Replace(s) + "'", nil
 	}
-	return "", fmt.Errorf("Unsupported value type: %T", v)
+	return "", fmt.Errorf("unsupported value type: %T", v)
 }

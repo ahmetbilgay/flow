@@ -372,7 +372,7 @@ func firecrawlURLs(v interface{}) []interface{} {
 	seen := map[string]bool{}
 	add := func(s string) {
 		s = strings.TrimSpace(s)
-		if s == "" || !(strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || firecrawlURLLike.MatchString(s)) {
+		if s == "" || !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") && !firecrawlURLLike.MatchString(s) {
 			return
 		}
 		if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {

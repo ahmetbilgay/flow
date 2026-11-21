@@ -628,14 +628,6 @@ func pageNumber(param string, start int) restPager {
 	}
 }
 
-// offsetPager advances an offset query parameter by the records received.
-func offsetPager(param string) restPager {
-	return func(p *restPage, _ interface{}, _ http.Header) bool {
-		p.query.Set(param, strconv.Itoa(p.got))
-		return true
-	}
-}
-
 // cursorPager copies a cursor from the response into a query parameter.
 func cursorPager(respPath, param string) restPager {
 	return func(p *restPage, res interface{}, _ http.Header) bool {

@@ -313,14 +313,15 @@ func bqInsert(ec *execCtx, i int, _ Item, c *restClient) ([]Item, error) {
 		mode, _ := ec.str(0, "dataMode", "autoMap")
 		for k := range items {
 			rec := map[string]interface{}{}
-			if mode == "autoMap" {
+			switch mode {
+			case "autoMap":
 				for _, f := range fields {
 					name := toString(asMap(f)["name"])
 					if v, ok := items[k].JSON[name]; ok {
 						rec[name] = v
 					}
 				}
-			} else if mode == "define" {
+			case "define":
 				v, err := ec.param(k, "fieldsUi.values", nil)
 				if err != nil {
 					return nil, err
