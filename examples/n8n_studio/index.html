@@ -92,7 +92,8 @@ rect.ring { fill: none; stroke: transparent; stroke-width: 3; }
 .sticky text { fill: var(--text); font-size: 12px; opacity: .8; }
 .issues { display: flex; flex-direction: column; gap: 6px; }
 .issue { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
-.issue.bad { background: var(--bad-bg); } .issue.warn { background: var(--warn-bg); } .issue.info { background: var(--info-bg); }
+.issue.bad { background: var(--bad-bg); }
+.issue a { color: inherit; text-decoration: underline; } .issue.warn { background: var(--warn-bg); } .issue.info { background: var(--info-bg); }
 .issue b { white-space: nowrap; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -114,6 +115,13 @@ tr.on td { background: var(--panel-2); }
 .toast.err { background: var(--bad); color: #fff; }
 .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
 .kv div:nth-child(odd) { color: var(--muted); }
+.mcard { text-align: left; width: 100%; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 9px 10px; display: flex; flex-direction: column; gap: 5px; }
+.mcard:hover { border-color: var(--muted); }
+.mcard.on { border-color: var(--accent); }
+.mcard .nm { font-weight: 600; font-size: 13px; line-height: 1.3; }
+.svc { display: flex; flex-wrap: wrap; gap: 3px; }
+.svc span { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
+.setup-row { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 8px; align-items: center; }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .ports { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
 @media (max-width: 900px) {
@@ -137,11 +145,18 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     <section>
       <h2>Load a workflow</h2>
       <div class="tabs" id="loadTabs">
-        <button data-t="samples" class="on">Samples</button>
-        <button data-t="paste">Paste / file</button>
+        <button data-t="market" class="on">Market</button>
+        <button data-t="samples">Samples</button>
+        <button data-t="paste">Paste</button>
         <button data-t="gallery">Gallery</button>
       </div>
-      <div data-p="samples" class="list" id="samples"><span class="muted small">Loading…</span></div>
+      <div data-p="market" class="stack">
+        <input id="mq" placeholder="Search templates (e.g. telegram)">
+        <select id="mcat"><option value="">All categories</option></select>
+        <div id="market" class="stack"><span class="muted small">Loading…</span></div>
+        <div class="row small"><button id="mprev" class="small">‹ Prev</button><span class="grow muted" id="mpage" style="text-align:center"></span><button id="mnext" class="small">Next ›</button></div>
+      </div>
+      <div data-p="samples" class="list" id="samples" hidden><span class="muted small">Loading…</span></div>
       <div data-p="paste" class="stack" hidden>
         <div class="drop" id="drop">Drop an n8n .json export here or <label style="color:var(--accent);cursor:pointer">browse<input type="file" id="file" accept=".json,application/json" hidden></label></div>
         <textarea id="paste" rows="8" placeholder='{"nodes": [...], "connections": {...}}'></textarea>
@@ -166,7 +181,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     <div class="empty card" id="welcome">
       <div>
         <h3>Try an n8n workflow</h3>
-        <p>Pick a sample on the left, paste an export, or load a template from the n8n gallery.<br>
+        <p>Browse the Market on the left, pick a sample, or paste an export.<br>
         You'll see which nodes are supported, then install it, run it and inspect every step.</p>
       </div>
     </div>
@@ -247,6 +262,9 @@ const state = {
   selected: null,
   view: { x: 0, y: 0, w: 1000, h: 400 },
   chatSession: Math.random().toString(36).slice(2),
+  template: null,    // market template shown (setup fields, accounts)
+  setup: {},         // setup field values typed by the user
+  market: { page: 1, q: '', category: '', total: 0 },
 };
 
 async function api(path, opts = {}) {
@@ -306,10 +324,11 @@ $('#loadGallery').onclick = async () => {
 };
 $('#galleryId').onkeydown = e => { if (e.key === 'Enter') $('#loadGallery').click(); };
 
-async function check(wf) {
+async function check(wf, tpl) {
   try {
     const r = await api('/api/check', { method: 'POST', body: { workflow: wf } });
     state.source = wf; state.check = r; state.exec = null; state.stepByNode = {}; state.selected = null;
+    state.template = tpl || null; state.setup = {};
     resetPanels();
     state.installedId = installedIds.has(r.id) ? r.id : null;
     state.endpoints = [];
@@ -328,6 +347,73 @@ function resetPanels() {
   mainTab('report');
 }
 
+// ---------------------------------------------------------------- market
+async function loadMarket() {
+  const m = state.market, el = $('#market');
+  el.innerHTML = '<span class="muted small">Loading…</span>';
+  let p;
+  try { p = await api(`/api/market?page=${m.page}&q=${encodeURIComponent(m.q)}&category=${encodeURIComponent(m.category)}`); }
+  catch (e) { el.innerHTML = `<span class="err small">${esc(e.message)}</span>`; return; }
+  m.total = p.total;
+  const sel = $('#mcat');
+  if (sel.options.length <= 1 && p.categories.length) {
+    p.categories.forEach(c => sel.add(new Option(`${c.name} (${c.count})`, c.name)));
+    sel.value = m.category;
+  }
+  const pages = Math.max(1, Math.ceil(p.total / 20));
+  $('#mpage').textContent = `${m.page} / ${pages} · ${p.total.toLocaleString()} templates`;
+  $('#mprev').disabled = m.page <= 1; $('#mnext').disabled = m.page >= pages;
+  if (!p.templates.length) { el.innerHTML = '<span class="muted small">No templates found.</span>'; return; }
+  el.innerHTML = '';
+  p.templates.forEach(t => {
+    const b = document.createElement('button');
+    b.className = 'mcard' + (state.template && state.template.source_id === t.id ? ' on' : '');
+    b.innerHTML = `<span class="nm">${esc(t.name)}</span><span class="svc">${t.services.slice(0, 5).map(x => `<span>${esc(x)}</span>`).join('')}${t.services.length > 5 ? `<span>+${t.services.length - 5}</span>` : ''}</span><span class="small muted">${t.total_views.toLocaleString()} views${t.author ? ' · ' + esc(t.author.name || t.author.username) : ''}</span>`;
+    b.onclick = async () => {
+      $$('#market .mcard').forEach(x => x.classList.remove('on')); b.classList.add('on');
+      toast('Checking “' + t.name + '”…');
+      try { const tpl = await api('/api/market/' + t.id); await check(tpl.workflow, tpl); }
+      catch (e) { toast(e.message, true); }
+    };
+    el.append(b);
+  });
+}
+let mqTimer;
+$('#mq').oninput = e => { clearTimeout(mqTimer); mqTimer = setTimeout(() => { state.market.q = e.target.value.trim(); state.market.page = 1; loadMarket(); }, 350); };
+$('#mcat').onchange = e => { state.market.category = e.target.value; state.market.page = 1; loadMarket(); };
+$('#mprev').onclick = () => { state.market.page--; loadMarket(); };
+$('#mnext').onclick = () => { state.market.page++; loadMarket(); };
+
+// setPath writes a value at a parameter path such as "a.b[0].c".
+function setPath(obj, path, value) {
+  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+  let cur = obj;
+  parts.forEach((k, i) => {
+    if (i === parts.length - 1) { cur[k] = value; return; }
+    if (cur[k] === undefined || cur[k] === null) cur[k] = /^\d+$/.test(parts[i + 1]) ? [] : {};
+    cur = cur[k];
+  });
+}
+const setupKey = f => f.node + '|' + f.parameter;
+function setupShown(v) { return v && typeof v === 'object' ? String(v.value ?? '') : String(v ?? ''); }
+// withSetup returns the workflow with the user's setup values written in.
+function withSetup(wf) {
+  if (!state.template) return wf;
+  const copy = JSON.parse(JSON.stringify(wf));
+  state.template.setup_fields.forEach(f => {
+    const v = state.setup[setupKey(f)];
+    if (v === undefined || v === '') return;
+    const node = (copy.nodes || []).find(n => n.name === f.node);
+    if (!node) return;
+    node.parameters = node.parameters || {};
+    const val = f.value && typeof f.value === 'object' && f.value.__rl
+      ? { __rl: true, mode: f.value.mode === 'url' ? 'url' : 'id', value: v }
+      : v;
+    setPath(node.parameters, f.parameter, val);
+  });
+  return copy;
+}
+
 // ---------------------------------------------------------------- installed list & credentials
 let installedIds = new Set();
 async function loadInstalled() {
@@ -343,6 +429,7 @@ async function loadInstalled() {
     b.onclick = async () => {
       state.check = { id: w.id, name: w.name, report: w.report, graph: w.graph };
       state.source = null; state.installedId = w.id; state.exec = null; state.stepByNode = {}; state.selected = null;
+      state.template = null; state.setup = {};
       resetPanels();
       await refreshEndpoints(); render(true); loadInstalled();
     };
@@ -521,6 +608,20 @@ async function renderReport() {
   const credsSet = await loadCreds();
   const sect = (title, body) => `<div style="margin-bottom:16px"><h2>${title}</h2>${body}</div>`;
   let html = '';
+  const tpl = state.template;
+  if (tpl) {
+    html += `<div class="issue info" style="margin-bottom:16px;flex-direction:column;gap:2px"><span><b>From the n8n gallery:</b> <a href="${esc(tpl.source_url)}" target="_blank" rel="noopener">#${esc(tpl.source_id)}</a>${tpl.author ? ' by ' + esc(tpl.author.name || tpl.author.username) : ''} · ${tpl.total_views.toLocaleString()} views${tpl.categories.length ? ' · ' + tpl.categories.map(esc).join(', ') : ''}</span></div>`;
+    if (tpl.needs_account.length) {
+      html += sect('Accounts to connect', `<div class="small muted" style="margin-bottom:6px">The template's author removed their credentials; connect your own account for each of these nodes.</div><table><tr><th>Node</th><th>Service</th></tr>${tpl.needs_account.map(n => `<tr><td>${esc(n.node)}</td><td><code>${esc(n.type.replace(/^@?[^.]*\./, ''))}</code></td></tr>`).join('')}</table>`);
+    }
+    if (tpl.setup_fields.length) {
+      html += sect('Setup — values to fill in before installing', `<div class="small muted" style="margin-bottom:8px">These parameters point at the author's own sheets, channels or IDs, or are placeholders. Your values are written into the workflow when you install it; empty ones keep the template's value.</div><div class="stack">${tpl.setup_fields.map(f => {
+        const k = setupKey(f);
+        const label = `<div><b class="small">${esc(f.node)}</b><div class="small muted">${esc(f.parameter)} · ${esc(f.reason)}</div></div>`;
+        return `<div class="setup-row">${label}<input data-setup="${esc(k)}" placeholder="${esc(setupShown(f.value))}" value="${esc(state.setup[k] ?? '')}"></div>`;
+      }).join('')}</div>`);
+    }
+  }
   if (!rep.runnable) html += sect('Blocking — must be supported before it runs', `<div class="issues">${rep.blocking.map(b => `<div class="issue bad"><b>${esc(b.node || 'workflow')}</b><span>${esc(b.message)}</span></div>`).join('')}</div>`);
   else html += `<div class="issue info" style="margin-bottom:16px">✓ Every node and feature in this workflow is supported${rep.credentials?.length ? ' — provide the credentials below, then install and run it.' : '. Install and run it.'}</div>`;
   if (rep.credentials?.length) {
@@ -539,6 +640,7 @@ async function renderReport() {
   if (rep.triggers?.length) html += sect('Triggers', `<table><tr><th>Node</th><th>Kind</th><th>Details</th></tr>${rep.triggers.map(t => `<tr><td>${esc(t.node)}${t.default ? ' <span class="chip">default</span>' : ''}</td><td>${esc(t.kind)}</td><td class="small">${esc([t.method, t.path, (t.cron || []).join(', '), t.responseMode].filter(Boolean).join(' · '))}</td></tr>`).join('')}</table>`);
   if (rep.warnings?.length) html += sect('Notes', `<div class="issues">${rep.warnings.map(w => `<div class="issue warn"><b>${esc(w.node || 'workflow')}</b><span>${esc(w.message)}</span></div>`).join('')}</div>`);
   el.innerHTML = html;
+  $$('[data-setup]', el).forEach(inp => inp.oninput = () => { state.setup[inp.dataset.setup] = inp.value; });
   $$('[data-save]', el).forEach(b => b.onclick = async () => {
     const type = b.dataset.save, ta = $(`textarea[data-cred="${CSS.escape(type)}"]`, el);
     let data; try { data = JSON.parse(ta.value); } catch { return toast('Credential must be a JSON object', true); }
@@ -559,8 +661,9 @@ $('#installBtn').onclick = async () => {
   if (!state.source) return;
   $('#installBtn').disabled = true;
   try {
-    const r = await api('/api/install', { method: 'POST', body: { workflow: state.source } });
+    const r = await api('/api/install', { method: 'POST', body: { workflow: withSetup(state.source) } });
     state.installedId = r.workflow.id;
+    state.check.graph = r.workflow.graph; // with the setup values applied
     if (r.warning) toast(r.warning, true); else toast('Installed “' + (r.workflow.name || r.workflow.id) + '”');
     await refreshEndpoints(); await loadInstalled(); render(false);
     if (r.activationExecutions?.length) watch(r.activationExecutions[0]);
@@ -724,6 +827,7 @@ async function loadHistory() {
 }
 
 loadSamples().catch(e => toast(e.message, true));
+loadMarket();
 loadInstalled();
 loadCreds();
 </script>

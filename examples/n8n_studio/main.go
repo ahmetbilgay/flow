@@ -27,11 +27,13 @@ import (
 	"os/signal"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dgmos/flow"
+	"github.com/dgmos/flow/internal/n8ntemplates"
 )
 
 //go:embed index.html samples/*.json
@@ -43,6 +45,8 @@ type server struct {
 	eng   *flow.Engine
 	creds *flow.N8NStaticCredentials
 	base  string // public URL of the n8n handler, for webhook URLs
+
+	market *n8ntemplates.Client
 
 	mu        sync.Mutex
 	workflows map[string]*installed
@@ -116,6 +120,7 @@ func main() {
 		base:      base + "/n8n",
 		workflows: map[string]*installed{},
 		credTypes: map[string]bool{},
+		market:    &n8ntemplates.Client{HTTP: &http.Client{Timeout: 20 * time.Second}},
 	}
 	s.eng.EnableN8N(flow.N8NOptions{
 		Credentials:   s.creds,
@@ -134,6 +139,8 @@ func main() {
 	mux.Handle("/", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/samples", s.samples)
 	mux.HandleFunc("GET /api/gallery/{id}", s.gallery)
+	mux.HandleFunc("GET /api/market", s.marketList)
+	mux.HandleFunc("GET /api/market/{id}", s.marketTemplate)
 	mux.HandleFunc("POST /api/check", s.check)
 	mux.HandleFunc("POST /api/install", s.install)
 	mux.HandleFunc("GET /api/workflows", s.list)
@@ -238,6 +245,36 @@ func (s *server) gallery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"name": body.Workflow.Name, "workflow": wf})
+}
+
+// ---------------------------------------------------------------- market
+
+// marketList returns a page of the public n8n gallery (paid templates left out).
+func (s *server) marketList(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	p, err := s.market.List(r.Context(), n8ntemplates.ListOptions{Page: page, Rows: 20, Search: q.Get("q"), Category: q.Get("category")})
+	if err != nil {
+		fail(w, 502, "gallery: %v", err)
+		return
+	}
+	writeJSON(w, 200, p)
+}
+
+// marketTemplate fetches one template and checks it: whether it runs, the
+// accounts it needs, its setup fields and its workflow.
+func (s *server) marketTemplate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !digits.MatchString(id) {
+		fail(w, 400, "template id must be a number")
+		return
+	}
+	t, err := s.market.Template(r.Context(), id)
+	if err != nil {
+		fail(w, 502, "template %s: %v", id, err)
+		return
+	}
+	writeJSON(w, 200, t)
 }
 
 // ---------------------------------------------------------------- check & install

@@ -7,6 +7,10 @@ go run ./examples/n8n_studio            # http://localhost:8080
 go run ./examples/n8n_studio -addr localhost:9000
 ```
 
+- **Market:** browse and search the public n8n gallery (paid templates are left out). Picking a
+  template checks it and shows the accounts it needs and its **setup fields**: parameters that
+  point at the author's own sheets, channels or IDs, or placeholders. Values you type there are
+  written into the workflow when you install it.
 - **Load** a workflow: built-in samples, paste or drop an n8n export, or load any
   template from [n8n.io/workflows](https://n8n.io/workflows) by its number.
 - **Report**: the workflow is drawn as in n8n; nodes are coloured by support

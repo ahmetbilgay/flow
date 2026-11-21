@@ -159,6 +159,18 @@ OAuth2 credentials (Google, Slack, Microsoft, X, LinkedIn, …) must return a va
 
 Provide durable `ChatMemory`, `PollState` and `DataTables` implementations when running several instances. Templates reference data tables of their author's n8n instance, so a Data Table node looks a table up by ID, then by name, and otherwise creates it (empty, with columns added as rows are written). If your `PollState` also implements `N8NPollStateSwapper` (`CompareAndSwapPollState`), cursors advance atomically and overlapping polls never emit the same items twice; otherwise polls are only serialized within one process.
 
+## Template catalog
+
+`cmd/n8n-templates` exports public n8n templates as JSON a backend can load into its template table. Each template is checked with the importer; by default only templates that import and run are written, and paid templates are always skipped.
+
+```sh
+go run ./cmd/n8n-templates -ids 2462,3050 -out templates.json
+go run ./cmd/n8n-templates -all -min-views 5000 -limit 200 -out templates.json
+go run ./cmd/n8n-templates -all -category "AI Chatbot" -out ai.json
+```
+
+Each entry carries `source_id`, `source_url`, `name`, `description`, `categories`, `author`, `total_views`, `node_types`, `runnable`, `credential_types` and `credentials` (as named in the template), `needs_account` (service nodes whose credential the author removed: the user connects an account for each), `triggers`, `setup_fields` (parameters pointing at the author's sheets, channels or IDs, and placeholders such as `YOUR_API_KEY` or `{{ voice id }}`, each with its node, parameter path and reason) and the `workflow` itself (without the author's pinned sample data). n8n Studio's Market tab uses the same code to browse the gallery. Templates are written by their authors on n8n.io: check n8n's terms and the authors' rights before offering them in a product.
+
 ## Measuring compatibility
 
 ```bash
