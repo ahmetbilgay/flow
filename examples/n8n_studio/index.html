@@ -77,7 +77,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: v
 .n rect.box { fill: var(--node); stroke: var(--line); stroke-width: 1.5; }
 .n.ok rect.box { stroke: var(--ok); } .n.bad rect.box { stroke: var(--bad); stroke-dasharray: 5 3; } .n.warn rect.box { stroke: var(--warn); }
 .n.disabled { opacity: .45; }
-.n.sel rect.box { stroke-width: 3; }
+.n.sel rect.box { stroke: var(--accent); stroke-width: 3; stroke-dasharray: none; }
 .n text { fill: var(--text); font-size: 12px; pointer-events: none; }
 .n text.ty { fill: var(--muted); font-size: 10.5px; }
 .n .ic { fill: var(--panel-2); } .n text.icx { font-size: 11px; font-weight: 700; fill: var(--muted); }
@@ -184,11 +184,13 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
           </div>
         </div>
         <div class="hd small" style="border-bottom:0;padding-bottom:0">
-          <span class="muted">Drag to pan · scroll to zoom · click a node for details</span>
+          <span class="muted">Drag to pan · ⌘/Ctrl + scroll or pinch to zoom · click a node for details</span>
           <div class="legend">
             <span><i style="border-color:var(--ok)"></i>supported</span>
             <span><i style="border-color:var(--warn)"></i>with notes</span>
             <span><i style="border-color:var(--bad);border-style:dashed"></i>unsupported</span>
+            <button class="ghost small" id="zoomOut" title="Zoom out">−</button>
+            <button class="ghost small" id="zoomIn" title="Zoom in">+</button>
             <button class="ghost small" id="fitBtn">Fit</button>
           </div>
         </div>
@@ -308,11 +310,22 @@ async function check(wf) {
   try {
     const r = await api('/api/check', { method: 'POST', body: { workflow: wf } });
     state.source = wf; state.check = r; state.exec = null; state.stepByNode = {}; state.selected = null;
+    resetPanels();
     state.installedId = installedIds.has(r.id) ? r.id : null;
     state.endpoints = [];
     if (state.installedId) await refreshEndpoints();
     render(true);
   } catch (e) { toast(e.message, true); }
+}
+
+// resetPanels clears what belonged to the previously shown workflow.
+function resetPanels() {
+  watching++;
+  $('#runStatus').innerHTML = '';
+  $('#runResult').innerHTML = '<div class="muted small">Run the workflow to see each step here.</div>';
+  $('#nodePanel').innerHTML = '<div class="muted small">Click a node in the graph.</div>';
+  $('#history').innerHTML = '';
+  mainTab('report');
 }
 
 // ---------------------------------------------------------------- installed list & credentials
@@ -330,6 +343,7 @@ async function loadInstalled() {
     b.onclick = async () => {
       state.check = { id: w.id, name: w.name, report: w.report, graph: w.graph };
       state.source = null; state.installedId = w.id; state.exec = null; state.stepByNode = {}; state.selected = null;
+      resetPanels();
       await refreshEndpoints(); render(true); loadInstalled();
     };
     el.append(b);
@@ -483,13 +497,21 @@ $('#fitBtn').onclick = () => { fitView(); applyView(); };
     state.view.x = drag.v.x - (e.clientX - drag.x) * k; state.view.y = drag.v.y - (e.clientY - drag.y) * k; applyView();
   });
   window.addEventListener('mouseup', () => { drag = null; cv.classList.remove('drag'); });
+  // Plain wheel scrolls the page; Ctrl/⌘ + wheel (and trackpad pinch,
+  // which browsers report with ctrlKey) zooms around the pointer.
   cv.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    const r = cv.getBoundingClientRect(), v = state.view;
-    const f = Math.exp(e.deltaY * 0.0015), mx = v.x + (e.clientX - r.left) / r.width * v.w, my = v.y + (e.clientY - r.top) / r.height * v.h;
+    const r = cv.getBoundingClientRect();
+    zoomAt(Math.exp(e.deltaY * 0.004), (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  }, { passive: false });
+  $('#zoomIn').onclick = () => zoomAt(1 / 1.25, 0.5, 0.5);
+  $('#zoomOut').onclick = () => zoomAt(1.25, 0.5, 0.5);
+  function zoomAt(f, fx, fy) {
+    const v = state.view, mx = v.x + fx * v.w, my = v.y + fy * v.h;
     const w = Math.min(Math.max(v.w * f, 200), 20000), h = w * v.h / v.w;
     state.view = { x: mx - (mx - v.x) * w / v.w, y: my - (my - v.y) * h / v.h, w, h }; applyView();
-  }, { passive: false });
+  }
 })();
 window.addEventListener('resize', () => { if (state.check) { fitView(); applyView(); } });
 
@@ -579,8 +601,14 @@ function showExecution(d) {
     const count = (s.outputs || []).reduce((n, p) => n + p.length, 0);
     return `<tr class="click" data-node="${esc(s.node)}"><td><span class="dot ${s.status}" style="display:inline-block;margin-right:6px"></span>${esc(s.node)}</td><td>${esc(s.status.toLowerCase())}${s.attempt > 0 ? ` <span class="chip warn">retry ${s.attempt}</span>` : ''}</td><td>${s.durationMs ?? ''}${s.durationMs !== undefined ? ' ms' : ''}</td><td>${s.status === 'COMPLETED' ? count : ''}</td></tr>${s.error ? `<tr><td colspan="4" class="err small">${esc(s.error)}</td></tr>` : ''}`;
   }).join('');
-  $('#runResult').innerHTML = `<table><tr><th>Step</th><th>Status</th><th>Time</th><th>Items</th></tr>${rows}</table>
-    <div><h2 style="margin-top:8px">Final output</h2>${itemsView([d.output || []])}</div>`;
+  // A workflow can end in several branches: show every end node that ran.
+  const g = state.check.graph;
+  const ends = g.nodes.filter(n => !n.sticky && state.stepByNode[n.name] &&
+    !g.links.some(l => l.from === n.name)).map(n => state.stepByNode[n.name]);
+  const outHtml = ends.length
+    ? ends.map(st => `<div><h2 style="margin-top:8px">Output · ${esc(st.node)}</h2>${st.status === 'COMPLETED' ? itemsView(st.outputs.length ? st.outputs : [[]]) : `<div class="small muted">${esc(st.status.toLowerCase())}</div>`}</div>`).join('')
+    : `<div><h2 style="margin-top:8px">Final output</h2>${itemsView([d.output || []])}</div>`;
+  $('#runResult').innerHTML = `<table><tr><th>Step</th><th>Status</th><th>Time</th><th>Items</th></tr>${rows}</table>${outHtml}`;
   $$('#runResult tr.click').forEach(tr => tr.onclick = () => { state.selected = tr.dataset.node; drawGraph(false); renderNode(tr.dataset.node); mainTab('node'); });
   renderHeader();
   drawGraph(false);
@@ -593,12 +621,14 @@ function itemsView(ports) {
   const tabsHtml = ports.length > 1 ? `<div class="ports">${ports.map((p, i) => `<button class="small" data-port="${i}">output ${i} · ${p.length}</button>`).join('')}</div>` : '';
   setTimeout(() => {
     const root = document.getElementById(id); if (!root) return;
+    let cur = 0, raw = false;
     const show = i => {
+      cur = i;
       $$('[data-port]', root).forEach(b => b.classList.toggle('primary', +b.dataset.port === i));
-      $('.body', root).innerHTML = table(ports[i] || []);
+      $('.body', root).innerHTML = raw ? `<div class="json"><pre>${esc(JSON.stringify(ports[i] || [], null, 2))}</pre></div>` : table(ports[i] || []);
     };
     $$('[data-port]', root).forEach(b => b.onclick = () => show(+b.dataset.port));
-    $('.raw', root).onclick = () => { const b = $('.body', root); b.dataset.raw = b.dataset.raw ? '' : '1'; b.innerHTML = b.dataset.raw ? `<div class="json"><pre>${esc(JSON.stringify(ports, null, 2))}</pre></div>` : table(ports[0] || []); };
+    $('.raw', root).onclick = () => { raw = !raw; show(cur); };
     show(ports.findIndex(p => p.length) >= 0 ? ports.findIndex(p => p.length) : 0);
   });
   return `<div id="${id}">${tabsHtml}<div class="body"></div><button class="ghost small raw" style="margin-top:4px">toggle raw JSON</button></div>`;
