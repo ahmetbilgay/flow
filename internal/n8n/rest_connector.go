@@ -28,6 +28,7 @@ import (
 //	@                  back to top-level parameters
 //	*                  copy the collection's remaining fields unchanged
 //	*snake             … with snake_case names
+//	*lower             … with lowercase names
 //	=k:v               a constant field (v is JSON when it parses)
 //
 // Empty values (unset, "", empty list) are skipped.
@@ -364,7 +365,7 @@ func (ec *execCtx) restFields(i int, spec string, dst map[string]interface{}) er
 			}
 			restSet(dst, k, x)
 			continue
-		case tok == "*" || tok == "*snake":
+		case tok == "*" || tok == "*snake" || tok == "*lower":
 			if prefix == "" {
 				continue
 			}
@@ -372,8 +373,11 @@ func (ec *execCtx) restFields(i int, spec string, dst map[string]interface{}) er
 				if used[prefix+"."+k] || restEmpty(v) {
 					continue
 				}
-				if tok == "*snake" {
+				switch tok {
+				case "*snake":
 					k = snakeCase(k)
+				case "*lower":
+					k = strings.ToLower(k)
 				}
 				dst[k] = v
 			}
