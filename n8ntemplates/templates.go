@@ -762,3 +762,116 @@ func nodeSignature(wf map[string]interface{}) string {
 	h := sha1.Sum([]byte(strings.Join(parts, "\x01")))
 	return hex.EncodeToString(h[:])
 }
+
+// ---------------------------------------------------------------- setup values
+
+// SetupValue is a value a user entered for a setup field.
+type SetupValue struct {
+	Node      string `json:"node"`
+	Parameter string `json:"parameter"`
+	Value     string `json:"value"`
+}
+
+// ApplySetup returns a copy of an n8n workflow export with the user's setup
+// values written into its node parameters. A resource locator keeps its
+// "url" mode and is otherwise switched to "id"; empty values leave the
+// template's value. Values for unknown nodes or malformed paths are
+// reported as errors and nothing is returned.
+func ApplySetup(workflow map[string]interface{}, values []SetupValue) (map[string]interface{}, error) {
+	b, err := json.Marshal(workflow)
+	if err != nil {
+		return nil, err
+	}
+	var wf map[string]interface{}
+	if err := json.Unmarshal(b, &wf); err != nil {
+		return nil, err
+	}
+	byName := map[string]map[string]interface{}{}
+	for _, n := range asList(wf["nodes"]) {
+		if m := asMap(n); m != nil {
+			byName[str(m["name"])] = m
+		}
+	}
+	for _, v := range values {
+		if v.Value == "" {
+			continue
+		}
+		n := byName[v.Node]
+		if n == nil {
+			return nil, fmt.Errorf("setup: no node %q", v.Node)
+		}
+		params := asMap(n["parameters"])
+		if params == nil {
+			params = map[string]interface{}{}
+			n["parameters"] = params
+		}
+		if err := setParam(params, v.Parameter, v.Value); err != nil {
+			return nil, fmt.Errorf("setup: %s %s: %w", v.Node, v.Parameter, err)
+		}
+	}
+	return wf, nil
+}
+
+var pathPartRe = regexp.MustCompile(`([^.\[\]]+)|\[(\d+)\]`)
+
+// setParam writes value at a dotted/indexed path ("a.b[0].c").
+func setParam(root map[string]interface{}, path, value string) error {
+	var parts []interface{} // string keys and int indices
+	for _, m := range pathPartRe.FindAllStringSubmatch(path, -1) {
+		if m[2] != "" {
+			i, _ := strconv.Atoi(m[2])
+			parts = append(parts, i)
+		} else {
+			parts = append(parts, m[1])
+		}
+	}
+	if len(parts) == 0 {
+		return errors.New("empty path")
+	}
+	var cur interface{} = root
+	for k, p := range parts {
+		last := k == len(parts)-1
+		switch key := p.(type) {
+		case string:
+			m, ok := cur.(map[string]interface{})
+			if !ok {
+				return errors.New("path does not match the parameters")
+			}
+			if last {
+				m[key] = setupLeaf(m[key], value)
+				return nil
+			}
+			if m[key] == nil {
+				if _, idx := parts[k+1].(int); idx {
+					m[key] = []interface{}{}
+				} else {
+					m[key] = map[string]interface{}{}
+				}
+			}
+			cur = m[key]
+		case int:
+			l, ok := cur.([]interface{})
+			if !ok || key >= len(l) {
+				return errors.New("path does not match the parameters")
+			}
+			if last {
+				l[key] = setupLeaf(l[key], value)
+				return nil
+			}
+			cur = l[key]
+		}
+	}
+	return nil
+}
+
+// setupLeaf replaces a parameter value, keeping resource locators.
+func setupLeaf(old interface{}, value string) interface{} {
+	if m := asMap(old); m != nil && m["__rl"] == true {
+		mode := "id"
+		if str(m["mode"]) == "url" {
+			mode = "url"
+		}
+		return map[string]interface{}{"__rl": true, "mode": mode, "value": value}
+	}
+	return value
+}

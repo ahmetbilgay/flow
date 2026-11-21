@@ -217,3 +217,33 @@ func TestLoadDir(t *testing.T) {
 		t.Fatalf("bom: %+v", bom)
 	}
 }
+
+func TestApplySetup(t *testing.T) {
+	wf := map[string]interface{}{"nodes": []interface{}{
+		node("Rows", "n8n-nodes-base.googleSheets", map[string]interface{}{"documentId": map[string]interface{}{"__rl": true, "mode": "list", "value": "AUTHOR", "cachedResultName": "x"}}, nil),
+		node("Prompt", "n8n-nodes-base.set", map[string]interface{}{"assignments": map[string]interface{}{"assignments": []interface{}{map[string]interface{}{"name": "k", "value": "YOUR_KEY"}}}}, nil),
+	}}
+	out, err := ApplySetup(wf, []SetupValue{
+		{Node: "Rows", Parameter: "documentId", Value: "MINE"},
+		{Node: "Prompt", Parameter: "assignments.assignments[0].value", Value: "sk-1"},
+		{Node: "Prompt", Parameter: "assignments.assignments[0].name", Value: ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(out)
+	for _, want := range []string{`"documentId":{"__rl":true,"mode":"id","value":"MINE"}`, `{"name":"k","value":"sk-1"}`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("missing %s in %s", want, b)
+		}
+	}
+	if asMap(asMap(asList(wf["nodes"])[0])["parameters"])["documentId"].(map[string]interface{})["value"] != "AUTHOR" {
+		t.Fatal("input workflow was modified")
+	}
+	if _, err := ApplySetup(wf, []SetupValue{{Node: "Nope", Parameter: "x", Value: "1"}}); err == nil {
+		t.Fatal("unknown node accepted")
+	}
+	if _, err := ApplySetup(wf, []SetupValue{{Node: "Prompt", Parameter: "assignments.assignments[5].value", Value: "1"}}); err == nil {
+		t.Fatal("out-of-range index accepted")
+	}
+}
