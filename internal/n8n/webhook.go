@@ -35,6 +35,17 @@ type HandlerOptions struct {
 	// RateLimit throttles webhook, chat, form and MCP requests (default: 600
 	// requests per minute per workflow, counted in process memory).
 	RateLimit RateLimit
+	// AuthorizeChat admits requests to chat triggers that are not public
+	// (the Chat Trigger's "Make Chat Publicly Available" is off, the n8n
+	// default): return true when r comes from your own signed-in chat UI,
+	// e.g. after checking its session or token. Nil serves only public
+	// chats; private ones answer 404, as in n8n.
+	AuthorizeChat func(r *http.Request, workflowID string) bool
+	// ForwardCookies passes the request's Cookie header to the workflow in
+	// $json.headers. Off by default: if the handler shares a domain with
+	// your app, a link to a workflow's webhook would hand the visitor's
+	// session cookie to the workflow's owner.
+	ForwardCookies bool
 }
 
 // Handler serves n8n-style entry points for imported workflows:
@@ -166,8 +177,10 @@ func (h *Handler) routes(ctx context.Context, force bool) (map[string]routeTarge
 const sandboxCSP = "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Add, not Set: a workflow's own CSP header can only narrow it further.
-	w.Header().Add("Content-Security-Policy", sandboxCSP)
+	w.Header().Set("Content-Security-Policy", sandboxCSP)
+	// Resume and form links carry signatures: never leak them via Referer.
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	path := strings.Trim(r.URL.Path, "/")
 	kind, rest, _ := strings.Cut(path, "/")
 	var key string
@@ -179,6 +192,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "form":
 		key = "form " + rest
 	case "resume":
+		if !h.allowClient(w, r) {
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
 		h.handleResume(w, r, rest)
 		return
 	case "mcp":
@@ -196,7 +213,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	routes, err := h.routes(r.Context(), false)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
+		httpError(w, http.StatusInternalServerError, "could not load the workflows")
 		return
 	}
 	target, ok := routes[key]
@@ -207,6 +224,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !ok || !h.live(r.Context(), target) {
+		httpError(w, http.StatusNotFound, fmt.Sprintf("The requested webhook %q is not registered.", rest))
+		return
+	}
+	if target.kind == "chat" && !toBool(nodeParams(target.node)["public"]) &&
+		(h.opts.AuthorizeChat == nil || !h.opts.AuthorizeChat(r, target.workflowID)) {
 		httpError(w, http.StatusNotFound, fmt.Sprintf("The requested webhook %q is not registered.", rest))
 		return
 	}
@@ -247,6 +269,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) live(ctx context.Context, t routeTarget) bool {
 	wf, err := h.eng.WorkflowDefinition(ctx, h.opts.Namespace, t.workflowID)
 	return err == nil && wf != nil && wf.Status != models.WorkflowInactive
+}
+
+// itemHeaders are the request headers a workflow sees. Cookies stay out
+// unless ForwardCookies is set (see HandlerOptions).
+func (h *Handler) itemHeaders(r *http.Request) map[string]interface{} {
+	headers := map[string]interface{}{}
+	for k := range r.Header {
+		lk := strings.ToLower(k)
+		if lk == "cookie" && !h.opts.ForwardCookies {
+			continue
+		}
+		headers[lk] = r.Header.Get(k)
+	}
+	return headers
 }
 
 func (h *Handler) authorize(r *http.Request, t routeTarget) error {
@@ -316,10 +352,6 @@ func (h *Handler) buildItem(r *http.Request, body []byte, t routeTarget) interfa
 		m["formMode"] = "production"
 		return m
 	}
-	headers := map[string]interface{}{}
-	for k := range r.Header {
-		headers[strings.ToLower(k)] = r.Header.Get(k)
-	}
 	query := map[string]interface{}{}
 	for k, v := range r.URL.Query() {
 		if len(v) == 1 {
@@ -329,7 +361,7 @@ func (h *Handler) buildItem(r *http.Request, body []byte, t routeTarget) interfa
 		}
 	}
 	return map[string]interface{}{
-		"headers":       headers,
+		"headers":       h.itemHeaders(r),
 		"params":        map[string]interface{}{},
 		"query":         query,
 		"body":          parsed,
@@ -617,6 +649,10 @@ func (h *Handler) handleResume(w http.ResponseWriter, r *http.Request, execID st
 		httpError(w, http.StatusConflict, "execution is no longer running")
 		return
 	}
+	if !h.live(r.Context(), routeTarget{workflowID: exec.WorkflowID}) {
+		httpError(w, http.StatusGone, "this automation has been stopped")
+		return
+	}
 	var step *models.ExecutionStep
 	for _, s := range steps {
 		if s.Status == models.TaskWaiting && (nodeID == "" || s.NodeID == nodeID) {
@@ -693,11 +729,7 @@ func (h *Handler) handleResume(w http.ResponseWriter, r *http.Request, execID st
 				q[k] = v[0]
 			}
 		}
-		headers := map[string]interface{}{}
-		for k := range r.Header {
-			headers[strings.ToLower(k)] = r.Header.Get(k)
-		}
-		item = map[string]interface{}{"headers": headers, "params": map[string]interface{}{}, "query": q, "body": parseBody(r, body)}
+		item = map[string]interface{}{"headers": h.itemHeaders(r), "params": map[string]interface{}{}, "query": q, "body": parseBody(r, body)}
 	}
 	out, _ := encodeOutput([][]Item{{{JSON: item, PairedItem: paired(0)}}}, nil)
 	if err := h.eng.CompleteStep(r.Context(), step, out); err != nil {

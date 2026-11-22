@@ -129,12 +129,35 @@ func TestN8NWebhookResponseModes(t *testing.T) {
 func TestN8NChatAndTelegramTriggers(t *testing.T) {
 	eng, srv, _ := startN8N(t)
 	install(t, eng, "bot", n8nWorkflow([]map[string]interface{}{
-		{"name": "Chat", "type": "@n8n/n8n-nodes-langchain.chatTrigger", "typeVersion": 1.1},
+		{"name": "Chat", "type": "@n8n/n8n-nodes-langchain.chatTrigger", "typeVersion": 1.1, "parameters": map[string]interface{}{"public": true}},
 		setNode("Answer", [3]string{"output", "string", "=echo: {{ $json.chatInput }} [{{ $json.sessionId }}]"}),
 	}, map[string]interface{}{"Chat": link("Answer")}))
 	req, _ := http.NewRequest("POST", srv.URL+"/n8n/chat/bot", strings.NewReader(`{"sessionId":"s1","chatInput":"hi"}`))
 	if code, body := do(t, req); code != 200 || body != `{"output":"echo: hi [s1]"}` {
 		t.Fatalf("chat: %d %s", code, body)
+	}
+
+	// A chat that is not public is only served to callers the host admits.
+	private := n8nWorkflow([]map[string]interface{}{
+		{"name": "Chat", "type": "@n8n/n8n-nodes-langchain.chatTrigger", "typeVersion": 1.1},
+		setNode("Answer", [3]string{"output", "string", "private"}),
+	}, map[string]interface{}{"Chat": link("Answer")})
+	install(t, eng, "inner", private)
+	req, _ = http.NewRequest("POST", srv.URL+"/n8n/chat/inner", strings.NewReader(`{"sessionId":"s1","chatInput":"hi"}`))
+	if code, _ := do(t, req); code != 404 {
+		t.Fatalf("private chat without AuthorizeChat: %d", code)
+	}
+	authed := httptest.NewServer(http.StripPrefix("/n8n", eng.N8NHandler(flow.N8NHandlerOptions{Namespace: "default", ResponseTimeout: 10 * time.Second,
+		AuthorizeChat: func(r *http.Request, wfID string) bool {
+			return wfID == "inner" && r.Header.Get("Authorization") == "Bearer app-session"
+		}})))
+	defer authed.Close()
+	for token, want := range map[string]int{"Bearer app-session": 200, "Bearer forged": 404} {
+		req, _ = http.NewRequest("POST", authed.URL+"/n8n/chat/inner", strings.NewReader(`{"sessionId":"s1","chatInput":"hi"}`))
+		req.Header.Set("Authorization", token)
+		if code, body := do(t, req); code != want {
+			t.Fatalf("private chat with %q: %d %s", token, code, body)
+		}
 	}
 
 	tg := map[string]interface{}{"name": "Telegram", "type": "n8n-nodes-base.telegramTrigger", "typeVersion": 1.1, "webhookId": "tg-hook-1"}
@@ -369,6 +392,29 @@ func TestN8NHumanInTheLoop(t *testing.T) {
 	if items := flow.N8NOutputItems(e.Output); items[0].JSON["status"] != "done" {
 		t.Fatalf("wait webhook: %s", e.Output)
 	}
+
+	// 4) A stopped automation's waiting links stop working.
+	execID, _ = eng.Execute(ctx, "default", "callback", []byte(`{}`))
+	waitingStep(t, eng, execID)
+	steps, _ = eng.GetExecutionSteps(ctx, "default", execID)
+	for _, s := range steps {
+		if items := flow.N8NOutputItems(s.Output); len(items) == 1 && items[0].JSON["url"] != nil {
+			resumeURL = items[0].JSON["url"].(string)
+		}
+	}
+	if err := eng.DeactivateN8NWorkflow(ctx, "default", "callback"); err != nil {
+		t.Fatal(err)
+	}
+	req, _ = http.NewRequest("POST", resumeURL, strings.NewReader(`{"status":"late"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusGone || resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("resume after deactivation: %d %v", resp.StatusCode, resp.Header)
+	}
 }
 
 func TestN8NTriggerActivationEvents(t *testing.T) {
@@ -602,6 +648,17 @@ func TestN8NWebhookSecurity(t *testing.T) {
 	csp := resp.Header.Values("Content-Security-Policy")
 	if resp.StatusCode != 200 || len(csp) != 1 || !strings.HasPrefix(csp[0], "sandbox ") || strings.Contains(csp[0], "allow-same-origin") {
 		t.Fatalf("page CSP: %d %q", resp.StatusCode, csp)
+	}
+	// The visitor's cookies never reach the workflow (its owner could read them).
+	inst("echo", n8nWorkflow([]map[string]interface{}{
+		{"name": "Hook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "parameters": map[string]interface{}{"path": "echo", "responseMode": "lastNode"}},
+		setNode("Seen", [3]string{"cookie", "string", "={{ $json.headers.cookie || 'none' }}"}, [3]string{"agent", "string", "={{ $json.headers['user-agent'] }}"}),
+	}, map[string]interface{}{"Hook": link("Seen")}))
+	req, _ := http.NewRequest("GET", srv.URL+"/n8n/webhook/echo", nil)
+	req.Header.Set("Cookie", "session=victim")
+	req.Header.Set("User-Agent", "probe")
+	if code, body := do(t, req); code != 200 || !strings.Contains(body, `"cookie":"none"`) || !strings.Contains(body, `"agent":"probe"`) {
+		t.Fatalf("cookie forwarded: %d %s", code, body)
 	}
 	// Every handler response carries it, errors included.
 	if resp, err := http.Get(srv.URL + "/n8n/webhook/nope"); err != nil || resp.StatusCode != 404 || !strings.HasPrefix(resp.Header.Get("Content-Security-Policy"), "sandbox ") {

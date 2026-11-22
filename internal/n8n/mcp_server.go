@@ -73,6 +73,10 @@ type mcpSSESession struct {
 	done   chan struct{}
 }
 
+// maxMCPSessions caps the open legacy SSE streams of one handler, each of
+// which holds a goroutine and a connection.
+const maxMCPSessions = 1000
+
 type mcpSessions struct {
 	mu sync.Mutex
 	m  map[string]*mcpSSESession
@@ -283,6 +287,11 @@ func (h *Handler) mcpSSE(w http.ResponseWriter, r *http.Request) {
 	h.sessions.mu.Lock()
 	if h.sessions.m == nil {
 		h.sessions.m = map[string]*mcpSSESession{}
+	}
+	if len(h.sessions.m) >= maxMCPSessions {
+		h.sessions.mu.Unlock()
+		httpError(w, http.StatusServiceUnavailable, "too many open MCP sessions")
+		return
 	}
 	h.sessions.m[id] = s
 	h.sessions.mu.Unlock()

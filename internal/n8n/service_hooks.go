@@ -102,7 +102,9 @@ func (q *hookRequest) events(name string, allEmpty bool) func(string) bool {
 func (q *hookRequest) fullItem() map[string]interface{} {
 	headers := map[string]interface{}{}
 	for k := range q.r.Header {
-		headers[strings.ToLower(k)] = q.r.Header.Get(k)
+		if lk := strings.ToLower(k); lk != "cookie" { // services send none; browsers' cookies stay out
+			headers[lk] = q.r.Header.Get(k)
+		}
 	}
 	query := map[string]interface{}{}
 	for k, v := range q.r.URL.Query() {

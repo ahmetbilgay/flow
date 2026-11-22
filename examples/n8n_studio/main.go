@@ -162,7 +162,10 @@ func main() {
 	mux.HandleFunc("GET /api/executions/{id}", s.execution)
 	mux.HandleFunc("GET /api/credentials", s.listCreds)
 	mux.HandleFunc("POST /api/credentials", s.setCred)
-	mux.Handle("/n8n/", http.StripPrefix("/n8n", s.eng.N8NHandler(flow.N8NHandlerOptions{Namespace: namespace, ResponseTimeout: 60 * time.Second})))
+	mux.Handle("/n8n/", http.StripPrefix("/n8n", s.eng.N8NHandler(flow.N8NHandlerOptions{Namespace: namespace, ResponseTimeout: 60 * time.Second,
+		// Studio is a local tool and its page is the chat UI, so private
+		// chats are served too. A product checks its own session here.
+		AuthorizeChat: func(*http.Request, string) bool { return true }})))
 
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
