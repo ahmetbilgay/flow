@@ -104,7 +104,7 @@ func (h *Handler) serveMCP(w http.ResponseWriter, r *http.Request, rest string) 
 			target, ok = routes["mcp "+path]
 		}
 	}
-	if !ok {
+	if !ok || !h.live(r.Context(), target) {
 		httpError(w, http.StatusNotFound, fmt.Sprintf("MCP server %q is not registered", path))
 		return
 	}

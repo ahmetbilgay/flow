@@ -499,6 +499,21 @@ func (s *SQLStorage) SaveWorkflow(ctx context.Context, namespace string, wf *mod
 	if err != nil {
 		return err
 	}
+	// Saving an existing workflow of the same namespace updates it (re-install,
+	// activation changes); an id owned by another namespace still fails on the
+	// primary key instead of being overwritten.
+	var n int
+	exists := s.ph(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = ? AND namespace = ?", s.t("workflows")))
+	if err := s.db.GetContext(ctx, &n, exists, wf.ID, wf.Namespace); err != nil {
+		return err
+	}
+	if n > 0 {
+		q := s.ph(fmt.Sprintf(`UPDATE %s SET name = ?, description = ?, version = ?, status = ?, definition = ?, updated_at = ?
+			WHERE id = ? AND namespace = ?`, s.t("workflows")))
+		_, err = s.db.ExecContext(ctx, q,
+			wf.Name, wf.Description, wf.Version, wf.Status, definitionJSON, wf.UpdatedAt, wf.ID, wf.Namespace)
+		return err
+	}
 	q := s.ph(fmt.Sprintf(`INSERT INTO %s (id, namespace, name, description, version, status, definition, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, s.t("workflows")))
 	_, err = s.db.ExecContext(ctx, q,

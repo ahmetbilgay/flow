@@ -63,6 +63,25 @@ func runStorageContract(t *testing.T, store *SQLStorage) {
 	if err != nil || got.Name != "Integration WF" {
 		t.Fatalf("GetWorkflow: err=%v wf=%#v", err, got)
 	}
+	// Saving again updates the workflow (re-install, deactivation) ...
+	wf.Name, wf.Status = "Integration WF v2", models.WorkflowInactive
+	if err := store.SaveWorkflow(ctx, ns, wf); err != nil {
+		t.Fatalf("SaveWorkflow update: %v", err)
+	}
+	if got, err := store.GetWorkflow(ctx, ns, "wf-1"); err != nil || got.Name != "Integration WF v2" || got.Status != models.WorkflowInactive {
+		t.Fatalf("GetWorkflow after update: err=%v wf=%#v", err, got)
+	}
+	if list, err := store.ListWorkflows(ctx, ns); err != nil || len(list) != 1 {
+		t.Fatalf("ListWorkflows after update: err=%v n=%d", err, len(list))
+	}
+	// ... but never takes over another namespace's workflow.
+	other := *wf
+	if err := store.SaveWorkflow(ctx, integrationtest.UniqueNamespace(), &other); err == nil {
+		t.Fatal("SaveWorkflow overwrote a workflow of another namespace")
+	}
+	if got, err := store.GetWorkflow(ctx, ns, "wf-1"); err != nil || got.Namespace != ns {
+		t.Fatalf("workflow moved namespace: err=%v wf=%#v", err, got)
+	}
 
 	exec := &models.Execution{
 		ID: "exec-1", Namespace: ns, WorkflowID: "wf-1", Version: 1,

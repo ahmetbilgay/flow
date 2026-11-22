@@ -90,6 +90,9 @@ func (h *Handler) routes(ctx context.Context, force bool) (map[string]routeTarge
 	sort.Slice(wfs, func(i, j int) bool { return wfs[i].ID < wfs[j].ID })
 	idx := map[string]routeTarget{}
 	for _, wf := range wfs {
+		if wf.Status == models.WorkflowInactive {
+			continue // deactivated or uninstalled: its routes are gone
+		}
 		for i := range wf.Nodes {
 			n := &wf.Nodes[i]
 			p := nodeParams(n)
@@ -183,7 +186,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			target, ok = routes[key]
 		}
 	}
-	if !ok {
+	if !ok || !h.live(r.Context(), target) {
 		httpError(w, http.StatusNotFound, fmt.Sprintf("The requested webhook %q is not registered.", rest))
 		return
 	}
@@ -213,6 +216,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.respond(w, r, target, execID)
+}
+
+// live re-reads the target workflow so a route stops answering as soon as
+// its workflow is deactivated or deleted, even on another replica whose
+// route index is a few seconds old.
+func (h *Handler) live(ctx context.Context, t routeTarget) bool {
+	wf, err := h.eng.WorkflowDefinition(ctx, h.opts.Namespace, t.workflowID)
+	return err == nil && wf != nil && wf.Status != models.WorkflowInactive
 }
 
 func (h *Handler) authorize(r *http.Request, t routeTarget) error {

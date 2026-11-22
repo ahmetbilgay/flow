@@ -469,3 +469,58 @@ func TestN8NRenameConflictingWebhooks(t *testing.T) {
 		}
 	}
 }
+
+func TestN8NDeactivateWorkflow(t *testing.T) {
+	eng, srv, _ := startN8N(t)
+	ctx := context.Background()
+	hook := map[string]interface{}{"name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "webhookId": "api",
+		"parameters": map[string]interface{}{"path": "api", "httpMethod": "GET", "responseMode": "lastNode"}}
+	daily := map[string]interface{}{"name": "Every day", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2,
+		"parameters": map[string]interface{}{"rule": map[string]interface{}{"interval": []interface{}{map[string]interface{}{"triggerAtHour": 9}}}}}
+	data := n8nWorkflow([]map[string]interface{}{hook, daily, setNode("Reply", [3]string{"ok", "string", "yes"})},
+		map[string]interface{}{"Webhook": link("Reply"), "Every day": link("Reply")})
+	get := func() int {
+		req, _ := http.NewRequest("GET", srv.URL+"/n8n/webhook/api", nil)
+		code, _ := do(t, req)
+		return code
+	}
+	schedules := func() int {
+		list, err := eng.CronManager.ListSchedules(ctx, "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, s := range list {
+			if s.WorkflowID == "api" {
+				n++
+			}
+		}
+		return n
+	}
+
+	install(t, eng, "api", data)
+	install(t, eng, "api", data) // re-install replaces the schedule
+	if code := get(); code != 200 || schedules() != 1 {
+		t.Fatalf("installed: GET %d, %d schedules", code, schedules())
+	}
+	if err := eng.DeactivateN8NWorkflow(ctx, "default", "api"); err != nil {
+		t.Fatal(err)
+	}
+	if code := get(); code != 404 || schedules() != 0 {
+		t.Fatalf("deactivated: GET %d, %d schedules", code, schedules())
+	}
+	// The path is free for another workflow while this one is stopped.
+	if _, err := eng.InstallN8NWorkflow(ctx, "default", data, flow.N8NInstallOptions{N8NImportOptions: flow.N8NImportOptions{ID: "api2"}}); err != nil {
+		t.Fatalf("path of an inactive workflow must be free: %v", err)
+	}
+	if err := eng.DeactivateN8NWorkflow(ctx, "default", "api2"); err != nil {
+		t.Fatal(err)
+	}
+	install(t, eng, "api", data)
+	if code := get(); code != 200 || schedules() != 1 {
+		t.Fatalf("re-activated: GET %d, %d schedules", code, schedules())
+	}
+	if err := eng.DeactivateN8NWorkflow(ctx, "default", "missing"); err == nil {
+		t.Fatal("deactivating an unknown workflow must fail")
+	}
+}

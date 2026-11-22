@@ -636,6 +636,18 @@ func isTerminal(s models.TaskStatus) bool {
 	return s == models.TaskCompleted || s == models.TaskFailed || s == models.TaskSkipped
 }
 
+// SetWorkflowStatus marks a workflow definition ACTIVE or INACTIVE without
+// auth checks (for trigger hosts such as the n8n handler).
+func (e *Engine) SetWorkflowStatus(ctx context.Context, namespace, workflowID string, status models.WorkflowStatus) error {
+	wf, err := e.storage.GetWorkflow(ctx, namespace, workflowID)
+	if err != nil {
+		return err
+	}
+	wf.Status = status
+	wf.UpdatedAt = time.Now()
+	return e.storage.SaveWorkflow(ctx, namespace, wf)
+}
+
 // WorkflowDefinitions lists workflow definitions of a namespace without auth
 // checks (for trigger routing).
 func (e *Engine) WorkflowDefinitions(ctx context.Context, namespace string) ([]*models.Workflow, error) {

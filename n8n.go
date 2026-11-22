@@ -235,6 +235,10 @@ func (e *Engine) InstallN8NWorkflow(ctx context.Context, namespace string, data 
 	if opts.SkipSchedules || e.CronManager == nil {
 		return res, nil
 	}
+	// A re-install replaces the workflow's schedules instead of adding to them.
+	if err := e.removeN8NSchedules(ctx, namespace, wf.ID); err != nil {
+		return res, err
+	}
 	tz := ""
 	if s, ok := wf.Metadata["settings"].(map[string]interface{}); ok {
 		if v, ok := s["timezone"].(string); ok && v != "DEFAULT" {
@@ -282,8 +286,56 @@ func N8NNodeSupported(nodeType string) bool { return n8n.Supported(nodeType) }
 // webhook path the imported workflow wants.
 var ErrN8NWebhookConflict = errors.New("webhook path is already used by another workflow")
 
-// webhookRoutesInUse maps the webhook routes of a namespace's workflows,
-// other than skipID, to the workflow using them.
+// DeactivateN8NWorkflow stops an installed workflow: N8NHandler stops
+// serving its webhook, chat, form and MCP routes (immediately, on every
+// replica), its schedules are removed and the webhooks registered in
+// external services are deleted. Running executions finish. The definition
+// stays in storage as INACTIVE, so its executions remain readable and its
+// webhook paths are free for other workflows. Call it when a user stops or
+// deletes an automation; InstallN8NWorkflow activates it again.
+func (e *Engine) DeactivateN8NWorkflow(ctx context.Context, namespace, workflowID string) error {
+	if e.n8nOpts == nil {
+		return errors.New("n8n support is not enabled: call EnableN8N first")
+	}
+	wf, err := e.WorkflowDefinition(ctx, namespace, workflowID)
+	if err != nil {
+		return err
+	}
+	// Close the routes first: nothing new starts while the rest is cleaned up.
+	if err := e.SetWorkflowStatus(ctx, namespace, workflowID, WorkflowInactive); err != nil {
+		return err
+	}
+	var errs []error
+	if err := e.removeN8NSchedules(ctx, namespace, workflowID); err != nil {
+		errs = append(errs, err)
+	}
+	if err := n8n.UnregisterWebhooks(ctx, e.n8nOpts, namespace, wf); err != nil {
+		errs = append(errs, fmt.Errorf("unregister service webhooks: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+func (e *Engine) removeN8NSchedules(ctx context.Context, namespace, workflowID string) error {
+	if e.CronManager == nil {
+		return nil
+	}
+	list, err := e.CronManager.ListSchedules(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("list schedules: %w", err)
+	}
+	for _, sc := range list {
+		if sc.WorkflowID != workflowID {
+			continue
+		}
+		if err := e.CronManager.RemoveSchedule(ctx, namespace, sc.ID); err != nil {
+			return fmt.Errorf("remove schedule %s: %w", sc.ID, err)
+		}
+	}
+	return nil
+}
+
+// webhookRoutesInUse maps the webhook routes of a namespace's active
+// workflows, other than skipID, to the workflow using them.
 func (e *Engine) webhookRoutesInUse(ctx context.Context, namespace, skipID string) (map[string]string, error) {
 	existing, err := e.WorkflowDefinitions(ctx, namespace)
 	if err != nil {
@@ -291,7 +343,7 @@ func (e *Engine) webhookRoutesInUse(ctx context.Context, namespace, skipID strin
 	}
 	used := map[string]string{}
 	for _, other := range existing {
-		if other.ID == skipID {
+		if other.ID == skipID || other.Status == WorkflowInactive {
 			continue
 		}
 		for _, k := range n8n.WebhookKeys(other) {
