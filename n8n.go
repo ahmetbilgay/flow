@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dgmos/flow/internal/n8n"
+	"github.com/redis/go-redis/v9"
 )
 
 // ========================================
@@ -45,6 +46,10 @@ type (
 	N8NItem = n8n.Item
 	// N8NHandlerOptions configures the n8n webhook/chat/form HTTP handler.
 	N8NHandlerOptions = n8n.HandlerOptions
+	// N8NRateLimit throttles the handler's public routes (N8NHandlerOptions.RateLimit).
+	N8NRateLimit = n8n.RateLimit
+	// N8NRateLimiter keeps rate limit counters; see NewN8NRedisRateLimiter.
+	N8NRateLimiter = n8n.RateLimiter
 	// N8NPollStateStore persists polling trigger cursors.
 	N8NPollStateStore = n8n.PollStateStore
 	// N8NPollStateSwapper is an optional extension of N8NPollStateStore that
@@ -274,6 +279,12 @@ func (e *Engine) InstallN8NWorkflow(ctx context.Context, namespace string, data 
 //	http.Handle("/n8n/", http.StripPrefix("/n8n", engine.N8NHandler(flow.N8NHandlerOptions{Namespace: "default"})))
 func (e *Engine) N8NHandler(opts N8NHandlerOptions) http.Handler {
 	return n8n.NewHandler(e.Engine, e.n8nOpts, opts)
+}
+
+// NewN8NRedisRateLimiter keeps N8NHandler rate limit counters in Redis so
+// every replica shares one limit (N8NRateLimit.Limiter).
+func NewN8NRedisRateLimiter(client redis.UniversalClient, prefix string) N8NRateLimiter {
+	return n8n.NewRedisRateLimiter(client, prefix)
 }
 
 // N8NOutputItems decodes the items of an n8n step or execution output.

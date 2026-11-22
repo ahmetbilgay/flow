@@ -108,6 +108,9 @@ func (h *Handler) serveMCP(w http.ResponseWriter, r *http.Request, rest string) 
 		httpError(w, http.StatusNotFound, fmt.Sprintf("MCP server %q is not registered", path))
 		return
 	}
+	if !h.allowWorkflow(w, r, target.workflowID) {
+		return
+	}
 	if err := h.authorize(r, target); err != nil {
 		httpError(w, http.StatusUnauthorized, "Authorization data is wrong!")
 		return

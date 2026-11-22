@@ -32,6 +32,9 @@ type HandlerOptions struct {
 	ResponseTimeout time.Duration
 	// MaxBodyBytes caps request bodies (default 16 MiB).
 	MaxBodyBytes int64
+	// RateLimit throttles webhook, chat, form and MCP requests (default: 600
+	// requests per minute per workflow, counted in process memory).
+	RateLimit RateLimit
 }
 
 // Handler serves n8n-style entry points for imported workflows:
@@ -179,10 +182,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleResume(w, r, rest)
 		return
 	case "mcp":
+		if !h.allowClient(w, r) {
+			return
+		}
 		h.serveMCP(w, r, rest)
 		return
 	default:
 		httpError(w, http.StatusNotFound, "unknown endpoint")
+		return
+	}
+	if !h.allowClient(w, r) {
 		return
 	}
 	routes, err := h.routes(r.Context(), false)
@@ -199,6 +208,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok || !h.live(r.Context(), target) {
 		httpError(w, http.StatusNotFound, fmt.Sprintf("The requested webhook %q is not registered.", rest))
+		return
+	}
+	if !h.allowWorkflow(w, r, target.workflowID) {
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, h.opts.MaxBodyBytes+1))

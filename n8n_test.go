@@ -608,3 +608,41 @@ func TestN8NWebhookSecurity(t *testing.T) {
 		t.Fatalf("404 CSP: %v %+v", err, resp)
 	}
 }
+
+func TestN8NWebhookRateLimit(t *testing.T) {
+	eng := flow.NewEngine(flow.NewMemoryStorage(), flow.NewRegistry())
+	eng.EnableN8N(flow.N8NOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.StartWorkerWithOptions(ctx, "rl", "w", flow.WorkerOptions{Concurrency: 2, PollInterval: 5 * time.Millisecond})
+	srv := httptest.NewServer(http.StripPrefix("/n8n", eng.N8NHandler(flow.N8NHandlerOptions{Namespace: "rl", RateLimit: flow.N8NRateLimit{PerWorkflow: 3}})))
+	defer srv.Close()
+	for _, id := range []string{"a", "b"} {
+		data := n8nWorkflow([]map[string]interface{}{
+			{"name": "Hook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "parameters": map[string]interface{}{"path": "rl-" + id, "httpMethod": "POST"}},
+			setNode("Ok", [3]string{"ok", "string", "yes"}),
+		}, map[string]interface{}{"Hook": link("Ok")})
+		if _, err := eng.InstallN8NWorkflow(ctx, "rl", data, flow.N8NInstallOptions{N8NImportOptions: flow.N8NImportOptions{ID: "rl-" + id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	post := func(path string) (int, string) {
+		resp, err := http.Post(srv.URL+"/n8n/webhook/"+path, "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get("Retry-After")
+	}
+	for i := 0; i < 3; i++ {
+		if code, _ := post("rl-a"); code != 200 {
+			t.Fatalf("request %d: %d", i+1, code)
+		}
+	}
+	if code, retry := post("rl-a"); code != 429 || retry == "" {
+		t.Fatalf("4th request: %d Retry-After=%q", code, retry)
+	}
+	if code, _ := post("rl-b"); code != 200 {
+		t.Fatalf("another workflow must have its own limit: %d", code)
+	}
+}
