@@ -153,7 +153,18 @@ func (h *Handler) routes(ctx context.Context, force bool) (map[string]routeTarge
 	return idx, nil
 }
 
+// sandboxCSP is sent with every response of the handler. Workflows choose
+// their response bodies and content types (an HTML or SVG page from Respond
+// to Webhook is a normal n8n feature), so a page served by a workflow must not
+// run with the origin of the host app: sandbox without allow-same-origin
+// gives it an opaque origin, so its scripts cannot read the app's cookies or
+// storage or call the app's API as the signed-in user. Scripts, forms and
+// popups keep working, as with n8n's own webhook sandbox.
+const sandboxCSP = "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Add, not Set: a workflow's own CSP header can only narrow it further.
+	w.Header().Add("Content-Security-Policy", sandboxCSP)
 	path := strings.Trim(r.URL.Path, "/")
 	kind, rest, _ := strings.Cut(path, "/")
 	var key string
@@ -236,7 +247,10 @@ func (h *Handler) authorize(r *http.Request, t routeTarget) error {
 	if credType == "" {
 		return fmt.Errorf("unsupported webhook authentication %q", auth)
 	}
-	ec := &execCtx{ctx: r.Context(), opts: h.n8n, node: t.node, data: &execData{wf: &models.Workflow{ID: t.workflowID}}}
+	// The credential provider scopes credentials by namespace: resolve the
+	// webhook's credential in the handler's namespace, never in "".
+	ctx := engine.WithExecutionContext(r.Context(), h.opts.Namespace, "")
+	ec := &execCtx{ctx: ctx, opts: h.n8n, node: t.node, data: &execData{wf: &models.Workflow{ID: t.workflowID}}}
 	c, err := ec.credential(credType)
 	if err != nil {
 		return err
@@ -509,7 +523,7 @@ func finishedLater(a, b *models.ExecutionStep) bool {
 // would affect the host's origin (cookies, HSTS, CORS credentials).
 var blockedResponseHeaders = map[string]bool{
 	"Set-Cookie": true, "Set-Cookie2": true, "Clear-Site-Data": true, "Strict-Transport-Security": true,
-	"Public-Key-Pins": true, "Access-Control-Allow-Credentials": true, "Content-Length": true, "Transfer-Encoding": true, "Connection": true,
+	"Public-Key-Pins": true, "Access-Control-Allow-Credentials": true, "Content-Security-Policy": true, "Content-Length": true, "Transfer-Encoding": true, "Connection": true,
 }
 
 func validStatus(code int) int {

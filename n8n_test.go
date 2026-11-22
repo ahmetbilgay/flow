@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -522,5 +523,88 @@ func TestN8NDeactivateWorkflow(t *testing.T) {
 	}
 	if err := eng.DeactivateN8NWorkflow(ctx, "default", "missing"); err == nil {
 		t.Fatal("deactivating an unknown workflow must fail")
+	}
+}
+
+// nsCreds records the namespace each credential lookup is made in.
+type nsCreds struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (c *nsCreds) Credential(_ context.Context, namespace, credType string, _ flow.N8NCredentialRef) (map[string]interface{}, error) {
+	c.mu.Lock()
+	c.got = append(c.got, namespace)
+	c.mu.Unlock()
+	if namespace != "cust_7" {
+		return nil, errors.New("no such credential in namespace " + namespace)
+	}
+	return map[string]interface{}{"name": "X-Token", "value": "s3cret"}, nil
+}
+
+func TestN8NWebhookSecurity(t *testing.T) {
+	eng := flow.NewEngine(flow.NewMemoryStorage(), flow.NewRegistry())
+	creds := &nsCreds{}
+	eng.EnableN8N(flow.N8NOptions{Credentials: creds})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.StartWorkerWithOptions(ctx, "cust_7", "w", flow.WorkerOptions{Concurrency: 2, PollInterval: 5 * time.Millisecond})
+	srv := httptest.NewServer(http.StripPrefix("/n8n", eng.N8NHandler(flow.N8NHandlerOptions{Namespace: "cust_7", ResponseTimeout: 10 * time.Second})))
+	defer srv.Close()
+	inst := func(id string, data []byte) {
+		if _, err := eng.InstallN8NWorkflow(ctx, "cust_7", data, flow.N8NInstallOptions{N8NImportOptions: flow.N8NImportOptions{ID: id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Webhook header auth resolves its credential in the handler's namespace.
+	inst("secure", n8nWorkflow([]map[string]interface{}{
+		{"name": "Hook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "parameters": map[string]interface{}{"path": "secure", "httpMethod": "POST", "authentication": "headerAuth", "responseMode": "lastNode"},
+			"credentials": map[string]interface{}{"httpHeaderAuth": map[string]interface{}{"id": "1", "name": "token"}}},
+		setNode("Ok", [3]string{"ok", "string", "yes"}),
+	}, map[string]interface{}{"Hook": link("Ok")}))
+	post := func(token string) int {
+		req, _ := http.NewRequest("POST", srv.URL+"/n8n/webhook/secure", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("X-Token", token)
+		}
+		code, _ := do(t, req)
+		return code
+	}
+	if code := post("s3cret"); code != 200 {
+		t.Fatalf("valid token: %d (lookups in %v)", code, creds.got)
+	}
+	if code := post("wrong"); code != 401 {
+		t.Fatalf("wrong token: %d", code)
+	}
+	for _, ns := range creds.got {
+		if ns != "cust_7" {
+			t.Fatalf("credential looked up in namespace %q", ns)
+		}
+	}
+
+	// A workflow's HTML page is sandboxed and cannot lift the sandbox.
+	inst("page", n8nWorkflow([]map[string]interface{}{
+		{"name": "Hook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "parameters": map[string]interface{}{"path": "page", "responseMode": "responseNode"}},
+		{"name": "Respond", "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.1, "parameters": map[string]interface{}{
+			"respondWith": "text", "responseBody": "<script>fetch('/api/me')</script>",
+			"options": map[string]interface{}{"responseHeaders": map[string]interface{}{"entries": []interface{}{
+				map[string]interface{}{"name": "Content-Type", "value": "text/html"},
+				map[string]interface{}{"name": "Content-Security-Policy", "value": "default-src *"},
+			}}}}},
+	}, map[string]interface{}{"Hook": link("Respond")}))
+	resp, err := http.Get(srv.URL + "/n8n/webhook/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	csp := resp.Header.Values("Content-Security-Policy")
+	if resp.StatusCode != 200 || len(csp) != 1 || !strings.HasPrefix(csp[0], "sandbox ") || strings.Contains(csp[0], "allow-same-origin") {
+		t.Fatalf("page CSP: %d %q", resp.StatusCode, csp)
+	}
+	// Every handler response carries it, errors included.
+	if resp, err := http.Get(srv.URL + "/n8n/webhook/nope"); err != nil || resp.StatusCode != 404 || !strings.HasPrefix(resp.Header.Get("Content-Security-Policy"), "sandbox ") {
+		t.Fatalf("404 CSP: %v %+v", err, resp)
 	}
 }
